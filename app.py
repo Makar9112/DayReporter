@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import io
 from datetime import time
 
 import streamlit as st
@@ -89,7 +90,17 @@ def render_sidebar():
         "Загрузите Excel (.xlsx)",
         type=["xlsx"],
         help="Файл с заявками СПбМТСБ (колонки: номер, время, код инструмента, направление, цена, статус и др.)",
+        key=f"excel_uploader_{st.session_state.get('uploader_reset', 0)}",
     )
+
+    if st.session_state.get("df_all") is not None:
+        name = st.session_state.get("upload_name", "файл")
+        st.sidebar.caption(f"В памяти: **{name}**")
+        if st.sidebar.button("Очистить загруженные данные", use_container_width=True):
+            for key in ("df_all", "upload_name", "upload_key", "upload_bytes"):
+                st.session_state.pop(key, None)
+            st.session_state["uploader_reset"] = st.session_state.get("uploader_reset", 0) + 1
+            st.rerun()
 
     st.sidebar.subheader("Интервал анализа")
     filter_enabled = st.sidebar.checkbox(
@@ -157,6 +168,38 @@ def render_sidebar():
         time_from,
         time_to,
     )
+
+
+def ensure_dataframe_loaded(uploaded) -> bool:
+    """
+    Загружает Excel в session_state и удерживает его между rerun'ами
+    (клик «Скачать отчёт» и смена параметров не сбрасывают данные).
+    Возвращает True, если данные для анализа есть.
+    """
+    if uploaded is not None:
+        file_key = (uploaded.name, uploaded.size)
+        if st.session_state.get("upload_key") != file_key:
+            try:
+                raw = uploaded.getvalue()
+                with st.spinner("Чтение и обработка файла…"):
+                    df_all = load_excel(io.BytesIO(raw))
+            except ValueError as exc:
+                st.error(f"Ошибка загрузки: {exc}")
+                return False
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Непредвиденная ошибка при чтении файла: {exc}")
+                return False
+
+            if df_all.empty:
+                st.warning("Файл загружен, но не содержит строк данных.")
+                return False
+
+            st.session_state["upload_key"] = file_key
+            st.session_state["upload_name"] = uploaded.name
+            st.session_state["upload_bytes"] = raw
+            st.session_state["df_all"] = df_all
+
+    return st.session_state.get("df_all") is not None
 
 
 def render_summary_banner(summary: dict) -> None:
@@ -338,7 +381,7 @@ def main() -> None:
         time_to,
     ) = render_sidebar()
 
-    if uploaded is None:
+    if not ensure_dataframe_loaded(uploaded):
         st.info(
             "👈 Загрузите файл Excel (.xlsx) с заявками в боковой панели, "
             "чтобы начать анализ."
@@ -361,20 +404,7 @@ def main() -> None:
         )
         return
 
-    # Загрузка и подготовка данных
-    try:
-        with st.spinner("Чтение и обработка файла…"):
-            df_all = load_excel(uploaded)
-    except ValueError as exc:
-        st.error(f"Ошибка загрузки: {exc}")
-        return
-    except Exception as exc:  # noqa: BLE001 — показываем пользователю любую ошибку парсинга
-        st.error(f"Непредвиденная ошибка при чтении файла: {exc}")
-        return
-
-    if df_all.empty:
-        st.warning("Файл загружен, но не содержит строк данных.")
-        return
+    df_all = st.session_state["df_all"]
 
     # Предупреждение о нераспознанном времени
     bad_time = df_all["Время_сек"].isna().sum() if "Время_сек" in df_all.columns else 0
@@ -403,9 +433,9 @@ def main() -> None:
             )
             return
         st.success(
-            f"Файл загружен: **{len(df_all)}** заявок, "
-            f"в анализе **{len(df)}** (интервал {interval_label}, "
-            f"исключено {excluded}, в т.ч. возможные заявки «Корзины» до 11:00)."
+            f"Файл: **{st.session_state.get('upload_name', 'отчёт')}** — "
+            f"**{len(df_all)}** заявок, в анализе **{len(df)}** "
+            f"(интервал {interval_label}, исключено {excluded})."
         )
         early = df_all[df_all["Время_сек"].notna() & (df_all["Время_сек"] < start_sec)]
         if len(early):
@@ -417,8 +447,8 @@ def main() -> None:
         df = df_all
         summary_all = compute_summary(df_all)
         st.success(
-            f"Файл загружен: **{summary_all['total']}** заявок "
-            f"(фильтр времени выключен), "
+            f"Файл: **{st.session_state.get('upload_name', 'отчёт')}** — "
+            f"**{summary_all['total']}** заявок (фильтр времени выключен), "
             f"время {summary_all['time_min']} — {summary_all['time_max']}."
         )
 
@@ -454,6 +484,7 @@ def main() -> None:
         data=html.encode("utf-8"),
         file_name="spimex_report.html",
         mime="text/html",
+        key="download_html_report",
         help="HTML-отчёт со сводкой, результатами критериев и лимитами. Можно открыть в браузере и распечатать.",
     )
     st.caption("Для печати страницы приложения используйте Ctrl+P в браузере.")
