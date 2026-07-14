@@ -1,0 +1,35 @@
+# Python / venv
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Streamlit / secrets (не публиковать)
+.streamlit/secrets.toml
+
+# Локальные данные и отчёты
+*.xlsx
+*.xls
+*.csv
+!sample_data/
+.env
+.env.*
+
+# Логи и временные файлы
+*.log
+tmp/
+temp/
+.cache/
