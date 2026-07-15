@@ -362,12 +362,94 @@ def time_of_day_to_seconds(h: int, m: int = 0, s: int = 0) -> float:
     return float(h * 3600 + m * 60 + s)
 
 
+def _read_uploaded_bytes(uploaded_file) -> bytes:
+    """Читает байты из UploadedFile / path / BytesIO."""
+    if hasattr(uploaded_file, "getvalue"):
+        data = uploaded_file.getvalue()
+        # после getvalue сбрасываем указатель — на случай повторного чтения
+        if hasattr(uploaded_file, "seek"):
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+        return data
+    if hasattr(uploaded_file, "read"):
+        data = uploaded_file.read()
+        if hasattr(uploaded_file, "seek"):
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
+        return data if isinstance(data, (bytes, bytearray)) else bytes(data)
+    # путь к файлу
+    from pathlib import Path
+
+    return Path(uploaded_file).read_bytes()
+
+
+def _validate_excel_bytes(data: bytes) -> None:
+    """
+    Проверяет, что буфер похож на настоящий .xlsx (ZIP).
+    Частая проблема: «битые» файлы из папки (все нули) или не Excel под расширением .xlsx.
+    """
+    import zipfile
+    from io import BytesIO
+
+    if not data:
+        raise ValueError(
+            "Файл пустой (0 байт). Выгрузите журнал заявок из торгового терминала заново."
+        )
+
+    if not any(data):
+        raise ValueError(
+            "Файл повреждён: содержимое полностью пустое (нулевые байты), это не Excel. "
+            "Так бывает при сбое копирования/синхронизации OneDrive. "
+            "Откройте исходный файл на биржевом ПК, сохраните как .xlsx "
+            "(«Файл → Сохранить как») и загрузите эту копию."
+        )
+
+    # .xlsx / .xlsm — это ZIP (сигнатура PK)
+    if data[:2] != b"PK":
+        head = data.lstrip()[:80].lower()
+        if head.startswith(b"<html") or b"<table" in head:
+            raise ValueError(
+                "Похоже, это HTML, сохранённый с расширением .xlsx. "
+                "Откройте файл в Excel и сохраните в формате "
+                "«Книга Excel (*.xlsx)»."
+            )
+        if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+            raise ValueError(
+                "Это старый формат .xls. Откройте файл в Excel и сохраните как .xlsx."
+            )
+        raise ValueError(
+            "Файл не является корректным .xlsx (ожидается ZIP-архив Excel). "
+            "Откройте его в Microsoft Excel — если не открывается, пересохраните "
+            "журнал заявок из терминала СПбМТСБ в формате .xlsx."
+        )
+
+    if not zipfile.is_zipfile(BytesIO(data)):
+        raise ValueError(
+            "Файл имеет сигнатуру ZIP, но архив повреждён. "
+            "Пересохраните отчёт в Excel как .xlsx и загрузите снова."
+        )
+
+
 def load_excel(uploaded_file) -> pd.DataFrame:
     """Читает Excel-файл (.xlsx) и возвращает подготовленный DataFrame."""
+    from io import BytesIO
+
     try:
-        raw = pd.read_excel(uploaded_file, engine="openpyxl")
+        data = _read_uploaded_bytes(uploaded_file)
+        _validate_excel_bytes(data)
+        raw = pd.read_excel(BytesIO(data), engine="openpyxl")
+    except ValueError:
+        raise
     except Exception as exc:
-        raise ValueError(f"Не удалось прочитать Excel-файл: {exc}") from exc
+        raise ValueError(
+            f"Не удалось прочитать Excel-файл: {exc}. "
+            "Убедитесь, что это настоящий .xlsx (откройте в Excel и при необходимости "
+            "«Сохранить как» → Книга Excel)."
+        ) from exc
 
     if raw.empty:
         raise ValueError("Файл не содержит данных.")
