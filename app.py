@@ -36,6 +36,14 @@ from criteria import (
     run_all_checks,
 )
 from criteria import _format_sec as format_seconds
+from strategy_advisor import (
+    PRIORITY_HIGH,
+    PRIORITY_LABELS,
+    PRIORITY_LOW,
+    PRIORITY_MEDIUM,
+    build_strategy_report,
+    tips_to_dataframe,
+)
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
 
 
@@ -76,6 +84,20 @@ def _inject_css() -> None:
             padding: 0.75rem 1rem;
             margin-bottom: 0.75rem;
             border-radius: 0 8px 8px 0;
+        }
+        .tip-box {
+            border-left: 5px solid #bbb;
+            background: #fafbfc;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.65rem;
+            border-radius: 0 8px 8px 0;
+        }
+        .plan-box {
+            background: #eafaf1;
+            border: 1px solid #abebc6;
+            border-radius: 8px;
+            padding: 0.85rem 1rem;
+            margin-top: 0.5rem;
         }
         </style>
         """,
@@ -327,6 +349,92 @@ def render_tab_criteria(df, use_basket: bool, day_limit_c6: int) -> list:
     return results
 
 
+TIP_STYLE = {
+    PRIORITY_HIGH: ("🔴", "#c0392b"),
+    PRIORITY_MEDIUM: ("🟡", "#d68910"),
+    PRIORITY_LOW: ("🟢", "#27ae60"),
+}
+
+
+def render_tab_recommendations(
+    df,
+    results: list,
+    instrument_limit: int,
+    day_limit_c6: int,
+) -> None:
+    """Вкладка «Рекомендации» — советы по ритму и стратегии."""
+    st.subheader("Рекомендации по торговой стратегии")
+    st.caption(
+        "Советы на основе ритма подачи заявок, лимитов и результатов проверки критериев. "
+        "Это операционные подсказки, а не гарантия лучшей цены на рынке."
+    )
+
+    report = build_strategy_report(
+        df,
+        results,
+        instrument_limit=instrument_limit,
+        day_limit_c6=day_limit_c6,
+    )
+    stats = report.rhythm_stats
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Индекс дисциплины", f"{report.discipline_score}/100")
+    c2.metric("Оценка ритма", report.rhythm_grade)
+    c3.metric("Макс. / 100 мс", stats.get("max_100ms", 0), help="Безопасно: ≤2")
+    c4.metric("Макс. / 1 с", stats.get("max_1s", 0), help="Безопасно: ≤5")
+
+    if stats.get("gap_median_ms") is not None:
+        g1, g2, g3 = st.columns(3)
+        g1.metric("Медиана паузы", f"{stats['gap_median_ms']} мс")
+        g2.metric("Мин. пауза", f"{stats['gap_min_ms']} мс")
+        g3.metric("Пауз < 100 мс", stats.get("gaps_under_100ms", 0))
+
+    st.markdown("##### План на следующую сессию")
+    st.markdown(
+        "<div class='plan-box'>"
+        + "".join(f"<p style='margin:0.35rem 0'>• {p}</p>" for p in report.session_plan)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    high = [t for t in report.tips if t.priority == PRIORITY_HIGH]
+    if high:
+        st.error(f"Высокий приоритет: {len(high)} рекомендаций — стоит скорректировать ритм в первую очередь.")
+
+    st.markdown("##### Карточки рекомендаций")
+    if not report.tips:
+        st.success("Замечаний по ритму нет. Текущий темп выглядит дисциплинированным.")
+    else:
+        for tip in report.tips:
+            icon, color = TIP_STYLE.get(tip.priority, ("•", "#888"))
+            prio_label = PRIORITY_LABELS.get(tip.priority, tip.priority)
+            st.markdown(
+                f"<div class='tip-box' style='border-left-color:{color}'>"
+                f"<b>{icon} {tip.title}</b> "
+                f"<span style='color:{color};font-size:0.85rem'>· {prio_label}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.write(tip.message)
+            st.caption(f"Основание: {tip.evidence}")
+            st.info(f"**Действие:** {tip.action}")
+
+    with st.expander("Сводная таблица рекомендаций"):
+        st.dataframe(tips_to_dataframe(report.tips), use_container_width=True, hide_index=True)
+
+    with st.expander("Справка: безопасные ориентиры"):
+        st.markdown(
+            """
+            | Параметр | Порог нарушения | Безопасная зона |
+            |----------|-----------------|-----------------|
+            | Критерий №4 | ≥ 3 покупки / 100 мс | ≤ 2 / 100 мс, пауза ≥ 150 мс |
+            | Критерий №3 | ≥ 7 покупок / 1 с | ≤ 5 / 1 с, пауза ≥ 1,2 с |
+            | Лимит стакана | > 250 / инструмент | ≤ 200 (запас 20%) |
+            | Критерий №6 | > 500 покупок / день | ≤ 400 по инструменту |
+            """
+        )
+
+
 def render_tab_limits(df, instrument_limit: int):
     """Вкладка «Лимиты по инструментам»."""
     st.subheader("Лимит заявок на один инструмент (стакан)")
@@ -367,7 +475,7 @@ def main() -> None:
     st.markdown("<div class='main-title'>Анализатор торгов СПбМТСБ</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='sub-title'>Анализ заявок на нефтепродукты: статистика, графики, "
-        "критерии недобросовестных практик и лимиты по инструментам</div>",
+        "критерии недобросовестных практик, лимиты и рекомендации по стратегии</div>",
         unsafe_allow_html=True,
     )
 
@@ -397,6 +505,7 @@ def main() -> None:
             2. Графики  
             3. Проверка критериев  
             4. Лимиты по инструментам  
+            5. Рекомендации по стратегии  
 
             По умолчанию анализируются заявки с **11:00 до 13:00**
             (пакет из «Корзины» около 10:45 исключается).
@@ -454,8 +563,14 @@ def main() -> None:
 
     summary = compute_summary(df)
 
-    tab_stats, tab_charts, tab_crit, tab_limits = st.tabs(
-        ["Общая статистика", "Графики", "Проверка критериев", "Лимиты по инструментам"]
+    tab_stats, tab_charts, tab_crit, tab_limits, tab_advice = st.tabs(
+        [
+            "Общая статистика",
+            "Графики",
+            "Проверка критериев",
+            "Лимиты по инструментам",
+            "Рекомендации",
+        ]
     )
 
     with tab_stats:
@@ -469,6 +584,14 @@ def main() -> None:
 
     with tab_limits:
         limit_violations = render_tab_limits(df, instrument_limit=instrument_limit)
+
+    with tab_advice:
+        render_tab_recommendations(
+            df,
+            results,
+            instrument_limit=instrument_limit,
+            day_limit_c6=day_limit_c6,
+        )
 
     # --- Экспорт отчёта ---
     st.markdown("---")
