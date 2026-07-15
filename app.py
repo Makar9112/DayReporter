@@ -36,17 +36,19 @@ from criteria import (
     run_all_checks,
 )
 from criteria import _format_sec as format_seconds
+from rhythm_guide import (
+    fig_click_metronome,
+    fig_rhythm_howto_100ms,
+    fig_rhythm_howto_1s,
+    fig_user_gaps_vs_safe,
+    recommended_click_instruction,
+)
 from strategy_advisor import (
     PRIORITY_HIGH,
     PRIORITY_LABELS,
     PRIORITY_LOW,
     PRIORITY_MEDIUM,
     build_strategy_report,
-    fig_click_metronome,
-    fig_rhythm_howto_100ms,
-    fig_rhythm_howto_1s,
-    fig_user_gaps_vs_safe,
-    recommended_click_instruction,
     tips_to_dataframe,
 )
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
