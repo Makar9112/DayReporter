@@ -42,6 +42,11 @@ from strategy_advisor import (
     PRIORITY_LOW,
     PRIORITY_MEDIUM,
     build_strategy_report,
+    fig_click_metronome,
+    fig_rhythm_howto_100ms,
+    fig_rhythm_howto_1s,
+    fig_user_gaps_vs_safe,
+    recommended_click_instruction,
     tips_to_dataframe,
 )
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
@@ -376,6 +381,7 @@ def render_tab_recommendations(
         day_limit_c6=day_limit_c6,
     )
     stats = report.rhythm_stats
+    howto = recommended_click_instruction(stats)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Индекс дисциплины", f"{report.discipline_score}/100")
@@ -388,6 +394,62 @@ def render_tab_recommendations(
         g1.metric("Медиана паузы", f"{stats['gap_median_ms']} мс")
         g2.metric("Мин. пауза", f"{stats['gap_min_ms']} мс")
         g3.metric("Пауз < 100 мс", stats.get("gaps_under_100ms", 0))
+
+    # --- Шпаргалка «как нажимать» ---
+    st.markdown("---")
+    st.markdown("##### Как нажимать кнопку покупки")
+
+    if howto["mode"] == "slow_down":
+        st.error(howto["pace"])
+    elif howto["mode"] == "caution":
+        st.warning(howto["pace"])
+    else:
+        st.success(howto["pace"])
+
+    st.markdown(
+        f"<div class='plan-box'>"
+        f"<p style='margin:0.2rem 0'><b>Три правила:</b> {howto['rule_short']}</p>"
+        f"<p style='margin:0.45rem 0 0'>{howto['count_trick']}</p>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.plotly_chart(fig_click_metronome(), use_container_width=True)
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.plotly_chart(fig_rhythm_howto_100ms(), use_container_width=True)
+        st.caption("Красная зона 0–100 мс: третья заявка в этом окне = риск критерия №4.")
+    with col_b:
+        st.plotly_chart(fig_rhythm_howto_1s(), use_container_width=True)
+        st.caption("За одну секунду лучше не больше 4–5 кликов (порог нарушения — 7).")
+
+    st.plotly_chart(fig_user_gaps_vs_safe(stats, df), use_container_width=True)
+    st.caption(
+        "Зелёная линия — целевая пауза ≥150 мс. "
+        "Всё левее красной точки (<100 мс) — опасный «залп» кликов."
+    )
+
+    with st.expander("Пошагово: что делать руками в терминале", expanded=False):
+        st.markdown(
+            """
+1. **Выбрали инструмент** — не торопитесь «настрелять» заявками.
+2. **Клик покупки** — отправили одну заявку.
+3. **Пауза** — скажите про себя «и-раз» (~200 мс) или счёт «раз-и».
+4. **Следующий клик** — только после паузы.
+5. **Не больше двух кликов** в любые 100 мс подряд.
+6. **Не больше пяти кликов** в любую 1 секунду.
+7. **Сменили инструмент** — ритм считайте заново с нуля для него, но общую сессию тоже не «долбите».
+
+**Опасно**
+- Три быстрых клика подряд «чтобы успеть» (за <100 мс).
+- Семь и более кликов за секунду по одному инструменту.
+
+**Безопасно**
+- Ровный темп: клик → пауза 200 мс → клик → пауза…
+- Лучше чуть медленнее, чем один раз сорваться к критерию №4.
+            """
+        )
 
     st.markdown("##### План на следующую сессию")
     st.markdown(
