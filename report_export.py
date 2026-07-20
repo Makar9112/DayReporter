@@ -34,7 +34,7 @@ from criteria import (
     results_to_dataframe,
 )
 from strategy_advisor import PRIORITY_LABELS, build_strategy_report, tips_to_dataframe
-from utils import MEDIAN_HELP
+from help_texts import MEDIAN_HELP_PLAIN
 
 _STATUS_COLORS = {
     STATUS_VIOLATED: "#c0392b",
@@ -187,7 +187,7 @@ def build_full_html_report(
             <p class="lead">Для каждой покупки: время заявки минус время последнего договора по инструменту.</p>
             <p class="muted">Файл договоров: <b>{_esc(contracts_name or "—")}</b>. Окно поиска договора: {max_lag_sec:.0f} с.</p>
             {lag_metrics}
-            <div class="note-box">{_esc(MEDIAN_HELP.replace("**", ""))}</div>
+            <div class="note-box">{_esc(MEDIAN_HELP_PLAIN)}</div>
             {lag_chart}
             <h3>Таблица задержек</h3>
             {lag_table}
@@ -223,7 +223,7 @@ def build_full_html_report(
         ("Макс. / 1 с", str(stats.get("max_1s", 0))),
         ("Медиана паузы", _fmt_ms_sec(stats.get("gap_median_ms"))),
     ])}
-    <div class="note-box">{_esc(MEDIAN_HELP.replace("**", ""))}</div>
+    <div class="note-box">{_esc(MEDIAN_HELP_PLAIN)}</div>
     <h3>План на следующую сессию</h3>
     <ul class="plan">{plan_items}</ul>
     <h3>Карточки рекомендаций</h3>

@@ -56,14 +56,9 @@ from contracts_lag import (
     load_contracts_excel,
     match_orders_to_contracts,
 )
+from help_texts import MEDIAN_HELP, MEDIAN_HELP_SHORT
+from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
 from report_export import build_full_html_report
-from utils import (
-    MEDIAN_HELP,
-    MEDIAN_HELP_SHORT,
-    filter_by_session_time,
-    load_excel,
-    time_of_day_to_seconds,
-)
 
 
 # --- Настройки страницы ---
