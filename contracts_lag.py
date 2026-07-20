@@ -1,10 +1,14 @@
 """
-Сопоставление журнала заявок с отчётом по договорам и оценка задержки (мс).
+Сопоставление журнала заявок с отчётом по договорам и оценка задержки реакции (мс).
+
+Логика под сценарий трейдера: увидел сделку на рынке → отправил заявку.
+Для каждой вашей заявки берётся последний договор по тому же инструменту,
+который произошёл *до* фиксации заявки (в пределах окна по времени).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
@@ -89,16 +93,13 @@ def load_contracts_excel(uploaded_file) -> pd.DataFrame:
     return prepare_contracts_dataframe(raw)
 
 
-def _price_match(a, b, eps: float = 0.01) -> bool:
-    if pd.isna(a) or pd.isna(b):
-        return False
-    return abs(float(a) - float(b)) <= eps
-
-
-def _lots_match(a, b) -> bool:
-    if pd.isna(a) or pd.isna(b):
-        return False
-    return int(round(float(a))) == int(round(float(b)))
+def _contracts_by_instrument(df_contracts: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """Договоры по инструменту, отсортированы по времени."""
+    out: Dict[str, pd.DataFrame] = {}
+    work = df_contracts.dropna(subset=["Время_сек", "Код инструмента"]).copy()
+    for code, group in work.groupby("Код инструмента", sort=False):
+        out[str(code)] = group.sort_values("Время_сек").reset_index(drop=True)
+    return out
 
 
 def match_orders_to_contracts(
@@ -110,18 +111,20 @@ def match_orders_to_contracts(
     prefer_executed: bool = True,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Для каждого договора ищет вашу заявку с тем же инструментом, ценой и лотами.
+    Для каждой вашей заявки находит последний рыночный договор по тому же инструменту
+  до момента фиксации заявки.
 
-    Возвращает ближайшую пару:
-    - если заявка была раньше договора, `Разница, мс` будет положительной, а тип "заявка раньше договора";
-    - если заявка была позже договора, `Разница, мс` будет отрицательной, а тип "заявка после договора".
+    Задержка реакции, мс = время заявки − время договора (всегда ≥ 0 для найденных пар).
+    Цена и объём договора с заявкой могут не совпадать — так и бывает при реакции на сделку.
     """
+    del prefer_executed  # оставлен в сигнатуре для совместимости с app.py
+
     meta: Dict[str, Any] = {
         "contracts_total": len(df_contracts),
-        "orders_total": len(df_orders),
+        "orders_total": 0,
         "matched": 0,
-        "unmatched_contracts": 0,
-        "late_orders": 0,
+        "unmatched_orders": 0,
+        "orders_before_first_contract": 0,
     }
 
     if df_contracts.empty or df_orders.empty:
@@ -131,172 +134,115 @@ def match_orders_to_contracts(
     if only_buys and "_is_buy" in orders.columns:
         orders = orders[orders["_is_buy"]].copy()
 
-    contracts = df_contracts.dropna(subset=["Время_сек"]).copy()
-    orders = orders.dropna(subset=["Время_сек"]).copy()
-
-    if contracts.empty or orders.empty:
+    orders = orders.dropna(subset=["Время_сек", "Код инструмента"]).copy()
+    meta["orders_total"] = len(orders)
+    if orders.empty:
         return pd.DataFrame(), meta
 
-    if prefer_executed and "_is_executed" in orders.columns:
-        orders_sorted = pd.concat(
-            [
-                orders[orders["_is_executed"]],
-                orders[~orders["_is_executed"]],
-            ],
-            ignore_index=True,
-        )
-    else:
-        orders_sorted = orders
+    by_inst = _contracts_by_instrument(df_contracts)
+    if not by_inst:
+        return pd.DataFrame(), meta
 
     rows: List[dict] = []
-    used_order_idx: set = set()
+    orders_sorted = orders.sort_values("Время_сек")
 
-    for _, c in contracts.iterrows():
-        c_time = c["Время_сек"]
-        code = c.get("Код инструмента")
-        price = c.get("Цена")
-        lots = c.get("Объем, лотов")
-
-        candidates = orders_sorted[
-            (orders_sorted["Код инструмента"] == code)
-            & orders_sorted["Цена"].apply(lambda p: _price_match(p, price))
-            & orders_sorted["Объем, лотов"].apply(lambda v: _lots_match(v, lots))
-        ]
-
-        if candidates.empty:
-            meta["unmatched_contracts"] += 1
+    for _, o in orders_sorted.iterrows():
+        o_time = float(o["Время_сек"])
+        code = str(o["Код инструмента"])
+        inst_contracts = by_inst.get(code)
+        if inst_contracts is None or inst_contracts.empty:
+            meta["unmatched_orders"] += 1
             continue
 
-        best_idx = None
-        best_abs_diff = None
-        best_diff_sec = None
-        for idx, o in candidates.iterrows():
-            if idx in used_order_idx:
-                continue
-            diff_sec = c_time - o["Время_сек"]
-            if abs(diff_sec) > max_lag_sec:
-                continue
-            if best_abs_diff is None or abs(diff_sec) < best_abs_diff:
-                best_abs_diff = abs(diff_sec)
-                best_diff_sec = diff_sec
-                best_idx = idx
-
-        if best_idx is None:
-            meta["unmatched_contracts"] += 1
+        times = inst_contracts["Время_сек"].astype(float)
+        # договоры строго до заявки
+        mask_before = times < o_time
+        if not mask_before.any():
+            meta["orders_before_first_contract"] += 1
+            meta["unmatched_orders"] += 1
             continue
 
-        o = orders_sorted.loc[best_idx]
-        used_order_idx.add(best_idx)
-        diff_ms = best_diff_sec * 1000
-        if diff_ms < 0:
-            meta["late_orders"] += 1
-            match_type = "заявка после договора"
-        else:
-            match_type = "заявка раньше договора"
-        rows.append(_match_row(c, o, diff_ms, match_type=match_type))
+        before = inst_contracts.loc[mask_before]
+        lag_sec = o_time - before["Время_сек"].astype(float)
+        within = lag_sec <= max_lag_sec
+        if not within.any():
+            meta["unmatched_orders"] += 1
+            continue
+
+        # последний договор перед заявкой в пределах окна
+        idx = before.loc[within, "Время_сек"].astype(float).idxmax()
+        c = inst_contracts.loc[idx]
+        reaction_ms = (o_time - float(c["Время_сек"])) * 1000
+        rows.append(_reaction_row(c, o, reaction_ms))
         meta["matched"] += 1
 
     result = pd.DataFrame(rows)
-    if not result.empty:
-        result["Задержка после договора, мс"] = result["Разница, мс"].map(
-            lambda v: round(abs(v), 1) if v < 0 else None
-        )
-        result["Фора до договора, мс"] = result["Разница, мс"].map(
-            lambda v: round(v, 1) if v > 0 else None
-        )
     return result, meta
 
 
-def _match_row(c, o, diff_ms: float, match_type: str) -> dict:
+def _reaction_row(c, o, reaction_ms: float) -> dict:
     return {
         "Номер договора": c.get("Номер договора", ""),
         "Время договора": format_timedelta(c.get("Время_td")),
+        "Цена договора": c.get("Цена"),
+        "Лоты договора": c.get("Объем, лотов"),
         "Номер заявки": o.get("Номер заявки", ""),
         "Время заявки": format_timedelta(o.get("Время_td")),
+        "Цена заявки": o.get("Цена"),
+        "Лоты заявки": o.get("Объем, лотов"),
         "Код инструмента": c.get("Код инструмента"),
-        "Цена": c.get("Цена"),
-        "Объем, лотов": c.get("Объем, лотов"),
         "Статус заявки": o.get("Статус", ""),
-        "Разница, мс": round(diff_ms, 1),
-        "Тип сопоставления": match_type,
+        "Задержка реакции, мс": round(reaction_ms, 1),
+        "Тип сопоставления": "заявка после договора",
     }
 
 
 def lag_summary(matched: pd.DataFrame) -> Dict[str, Any]:
-    """Сводка по двум сценариям: заявка позже сделки и заявка раньше сделки."""
-    if matched.empty or "Разница, мс" not in matched.columns:
-        return {}
+    """Сводка по задержке реакции (мс)."""
+    col = "Задержка реакции, мс"
+    if matched.empty or col not in matched.columns:
+        return {"after_count": 0}
 
-    after = matched[matched["Разница, мс"] < 0]["Разница, мс"].abs()
-    before = matched[matched["Разница, мс"] > 0]["Разница, мс"]
+    delays = matched[col].dropna()
+    if delays.empty:
+        return {"after_count": 0}
 
-    summary: Dict[str, Any] = {
-        "after_count": int(len(after)),
-        "before_count": int(len(before)),
+    return {
+        "after_count": int(len(delays)),
+        "after_min_ms": round(float(delays.min()), 1),
+        "after_median_ms": round(float(delays.median()), 1),
+        "after_p90_ms": round(float(delays.quantile(0.9)), 1),
+        "after_max_ms": round(float(delays.max()), 1),
+        "after_mean_ms": round(float(delays.mean()), 1),
     }
-
-    if len(after):
-        summary.update(
-            {
-                "after_min_ms": round(float(after.min()), 1),
-                "after_median_ms": round(float(after.median()), 1),
-                "after_p90_ms": round(float(after.quantile(0.9)), 1),
-                "after_max_ms": round(float(after.max()), 1),
-                "after_mean_ms": round(float(after.mean()), 1),
-            }
-        )
-
-    if len(before):
-        summary.update(
-            {
-                "before_min_ms": round(float(before.min()), 1),
-                "before_median_ms": round(float(before.median()), 1),
-                "before_p90_ms": round(float(before.quantile(0.9)), 1),
-                "before_max_ms": round(float(before.max()), 1),
-                "before_mean_ms": round(float(before.mean()), 1),
-            }
-        )
-
-    return summary
 
 
 def fig_lag_histogram(matched: pd.DataFrame):
     import plotly.express as px
 
-    if matched.empty:
+    col = "Задержка реакции, мс"
+    if matched.empty or col not in matched.columns:
         from analytics import _empty_fig
 
         return _empty_fig("Нет сопоставленных пар заявка–договор")
 
-    after = matched[matched["Разница, мс"] < 0].copy()
-    if after.empty:
-        from analytics import _empty_fig
-
-        return _empty_fig("Нет случаев, где заявка зарегистрирована после договора")
-
-    after["Задержка после договора, мс"] = after["Разница, мс"].abs()
-    after["Подпись"] = (
-        after["Время договора"].astype(str)
-        + " -> "
-        + after["Время заявки"].astype(str)
-    )
-
+    work = matched.sort_values(col)
     fig = px.scatter(
-        after.sort_values("Задержка после договора, мс"),
-        x="Время договора",
-        y="Задержка после договора, мс",
+        work,
+        x="Время заявки",
+        y=col,
         hover_data=[
-            "Время заявки",
+            "Время договора",
             "Номер заявки",
             "Номер договора",
             "Код инструмента",
-            "Цена",
-            "Объем, лотов",
+            "Цена договора",
+            "Цена заявки",
         ],
-        title="Сколько прошло от сделки до регистрации вашей заявки",
+        title="Задержка от последней сделки до регистрации вашей заявки",
         labels={
-            "Время договора": "Время сделки",
-            "Задержка после договора, мс": "Задержка после сделки, мс",
+            "Время заявки": "Время вашей заявки",
+            col: "Задержка реакции, мс",
         },
     )
     fig.update_traces(marker=dict(size=9, color="#c0392b"))
