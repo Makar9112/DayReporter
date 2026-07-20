@@ -111,7 +111,10 @@ def match_orders_to_contracts(
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Для каждого договора ищет вашу заявку с тем же инструментом, ценой и лотами.
-    Задержка (мс) = время договора − время фиксации заявки (положительная — заявка раньше сделки).
+
+    Возвращает ближайшую пару:
+    - если заявка была раньше договора, `Разница, мс` будет положительной, а тип "заявка раньше договора";
+    - если заявка была позже договора, `Разница, мс` будет отрицательной, а тип "заявка после договора".
     """
     meta: Dict[str, Any] = {
         "contracts_total": len(df_contracts),
@@ -165,45 +168,46 @@ def match_orders_to_contracts(
             continue
 
         best_idx = None
-        best_lag = None
+        best_abs_diff = None
+        best_diff_sec = None
         for idx, o in candidates.iterrows():
             if idx in used_order_idx:
                 continue
-            lag_sec = c_time - o["Время_сек"]
-            if lag_sec < 0:
+            diff_sec = c_time - o["Время_сек"]
+            if abs(diff_sec) > max_lag_sec:
                 continue
-            if lag_sec > max_lag_sec:
-                continue
-            if best_lag is None or lag_sec < best_lag:
-                best_lag = lag_sec
+            if best_abs_diff is None or abs(diff_sec) < best_abs_diff:
+                best_abs_diff = abs(diff_sec)
+                best_diff_sec = diff_sec
                 best_idx = idx
 
         if best_idx is None:
-            # Есть заявки по параметрам, но все позже договора или слишком рано
-            after = candidates[candidates["Время_сек"] > c_time]
-            if not after.empty:
-                meta["late_orders"] += 1
-                o = after.iloc[0]
-                lag_ms = (c_time - o["Время_сек"]) * 1000
-                rows.append(
-                    _match_row(c, o, lag_ms, match_type="опоздание (заявка после договора)")
-                )
-            else:
-                meta["unmatched_contracts"] += 1
+            meta["unmatched_contracts"] += 1
             continue
 
         o = orders_sorted.loc[best_idx]
         used_order_idx.add(best_idx)
-        lag_ms = best_lag * 1000
-        match_type = "исполнена" if o.get("_is_executed") else "не исполнена"
-        rows.append(_match_row(c, o, lag_ms, match_type=match_type))
+        diff_ms = best_diff_sec * 1000
+        if diff_ms < 0:
+            meta["late_orders"] += 1
+            match_type = "заявка после договора"
+        else:
+            match_type = "заявка раньше договора"
+        rows.append(_match_row(c, o, diff_ms, match_type=match_type))
         meta["matched"] += 1
 
     result = pd.DataFrame(rows)
+    if not result.empty:
+        result["Задержка после договора, мс"] = result["Разница, мс"].map(
+            lambda v: round(abs(v), 1) if v < 0 else None
+        )
+        result["Фора до договора, мс"] = result["Разница, мс"].map(
+            lambda v: round(v, 1) if v > 0 else None
+        )
     return result, meta
 
 
-def _match_row(c, o, lag_ms: float, match_type: str) -> dict:
+def _match_row(c, o, diff_ms: float, match_type: str) -> dict:
     return {
         "Номер договора": c.get("Номер договора", ""),
         "Время договора": format_timedelta(c.get("Время_td")),
@@ -213,28 +217,47 @@ def _match_row(c, o, lag_ms: float, match_type: str) -> dict:
         "Цена": c.get("Цена"),
         "Объем, лотов": c.get("Объем, лотов"),
         "Статус заявки": o.get("Статус", ""),
-        "Задержка, мс": round(lag_ms, 1),
+        "Разница, мс": round(diff_ms, 1),
         "Тип сопоставления": match_type,
     }
 
 
 def lag_summary(matched: pd.DataFrame) -> Dict[str, Any]:
-    """Сводка по задержкам (только положительные — заявка до договора)."""
-    if matched.empty or "Задержка, мс" not in matched.columns:
+    """Сводка по двум сценариям: заявка позже сделки и заявка раньше сделки."""
+    if matched.empty or "Разница, мс" not in matched.columns:
         return {}
 
-    positive = matched[matched["Задержка, мс"] > 0]["Задержка, мс"]
-    if positive.empty:
-        return {"count_positive": 0}
+    after = matched[matched["Разница, мс"] < 0]["Разница, мс"].abs()
+    before = matched[matched["Разница, мс"] > 0]["Разница, мс"]
 
-    return {
-        "count_positive": int(len(positive)),
-        "min_ms": round(float(positive.min()), 1),
-        "median_ms": round(float(positive.median()), 1),
-        "p90_ms": round(float(positive.quantile(0.9)), 1),
-        "max_ms": round(float(positive.max()), 1),
-        "mean_ms": round(float(positive.mean()), 1),
+    summary: Dict[str, Any] = {
+        "after_count": int(len(after)),
+        "before_count": int(len(before)),
     }
+
+    if len(after):
+        summary.update(
+            {
+                "after_min_ms": round(float(after.min()), 1),
+                "after_median_ms": round(float(after.median()), 1),
+                "after_p90_ms": round(float(after.quantile(0.9)), 1),
+                "after_max_ms": round(float(after.max()), 1),
+                "after_mean_ms": round(float(after.mean()), 1),
+            }
+        )
+
+    if len(before):
+        summary.update(
+            {
+                "before_min_ms": round(float(before.min()), 1),
+                "before_median_ms": round(float(before.median()), 1),
+                "before_p90_ms": round(float(before.quantile(0.9)), 1),
+                "before_max_ms": round(float(before.max()), 1),
+                "before_mean_ms": round(float(before.mean()), 1),
+            }
+        )
+
+    return summary
 
 
 def fig_lag_histogram(matched: pd.DataFrame):
@@ -245,18 +268,37 @@ def fig_lag_histogram(matched: pd.DataFrame):
 
         return _empty_fig("Нет сопоставленных пар заявка–договор")
 
-    pos = matched[matched["Задержка, мс"] > 0]
-    if pos.empty:
+    after = matched[matched["Разница, мс"] < 0].copy()
+    if after.empty:
         from analytics import _empty_fig
 
-        return _empty_fig("Нет положительных задержек (все заявки позже договоров)")
+        return _empty_fig("Нет случаев, где заявка зарегистрирована после договора")
 
-    fig = px.histogram(
-        pos,
-        x="Задержка, мс",
-        nbins=min(40, max(8, len(pos) // 3)),
-        title="Задержка: время договора − время фиксации заявки (мс)",
-        labels={"Задержка, мс": "мс"},
+    after["Задержка после договора, мс"] = after["Разница, мс"].abs()
+    after["Подпись"] = (
+        after["Время договора"].astype(str)
+        + " -> "
+        + after["Время заявки"].astype(str)
     )
+
+    fig = px.scatter(
+        after.sort_values("Задержка после договора, мс"),
+        x="Время договора",
+        y="Задержка после договора, мс",
+        hover_data=[
+            "Время заявки",
+            "Номер заявки",
+            "Номер договора",
+            "Код инструмента",
+            "Цена",
+            "Объем, лотов",
+        ],
+        title="Сколько прошло от сделки до регистрации вашей заявки",
+        labels={
+            "Время договора": "Время сделки",
+            "Задержка после договора, мс": "Задержка после сделки, мс",
+        },
+    )
+    fig.update_traces(marker=dict(size=9, color="#c0392b"))
     fig.update_layout(margin=dict(t=50, b=40, l=40, r=20))
     return fig
