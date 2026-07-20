@@ -51,6 +51,12 @@ from strategy_advisor import (
     build_strategy_report,
     tips_to_dataframe,
 )
+from contracts_lag import (
+    fig_lag_histogram,
+    lag_summary,
+    load_contracts_excel,
+    match_orders_to_contracts,
+)
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
 
 
@@ -116,19 +122,42 @@ def render_sidebar():
     """Боковая панель: загрузка файла и параметры проверки."""
     st.sidebar.header("Параметры")
     uploaded = st.sidebar.file_uploader(
-        "Загрузите Excel (.xlsx)",
+        "Журнал заявок (.xlsx)",
         type=["xlsx"],
         help="Файл с заявками СПбМТСБ (колонки: номер, время, код инструмента, направление, цена, статус и др.)",
         key=f"excel_uploader_{st.session_state.get('uploader_reset', 0)}",
     )
 
+    uploaded_contracts = st.sidebar.file_uploader(
+        "Отчёт по договорам (.xlsx)",
+        type=["xlsx"],
+        help="Выгрузка «Договоры»: Время договора, Код инструмента, Цена, Объем, лотов и др.",
+        key=f"contracts_uploader_{st.session_state.get('contracts_uploader_reset', 0)}",
+    )
+
     if st.session_state.get("df_all") is not None:
         name = st.session_state.get("upload_name", "файл")
-        st.sidebar.caption(f"В памяти: **{name}**")
+        st.sidebar.caption(f"Заявки: **{name}**")
+    if st.session_state.get("df_contracts") is not None:
+        cname = st.session_state.get("contracts_upload_name", "договоры")
+        st.sidebar.caption(f"Договоры: **{cname}**")
+
+    if st.session_state.get("df_all") is not None or st.session_state.get("df_contracts") is not None:
         if st.sidebar.button("Очистить загруженные данные", use_container_width=True):
-            for key in ("df_all", "upload_name", "upload_key", "upload_bytes"):
+            for key in (
+                "df_all",
+                "upload_name",
+                "upload_key",
+                "upload_bytes",
+                "df_contracts",
+                "contracts_upload_name",
+                "contracts_upload_key",
+            ):
                 st.session_state.pop(key, None)
             st.session_state["uploader_reset"] = st.session_state.get("uploader_reset", 0) + 1
+            st.session_state["contracts_uploader_reset"] = (
+                st.session_state.get("contracts_uploader_reset", 0) + 1
+            )
             st.rerun()
 
     st.sidebar.subheader("Интервал анализа")
@@ -188,14 +217,25 @@ def render_sidebar():
         "Критерии 1–2 проверяются в упрощённом режиме "
         "(нет данных о встречных заявках и лучшей цене стакана)."
     )
+    max_lag_sec = st.sidebar.number_input(
+        "Макс. интервал заявка → договор, с",
+        min_value=1,
+        max_value=600,
+        value=120,
+        step=10,
+        help="Сопоставление только если договор в пределах этого времени после фиксации заявки.",
+    )
+
     return (
         uploaded,
+        uploaded_contracts,
         use_basket,
         int(instrument_limit),
         int(day_limit_c6),
         filter_enabled,
         time_from,
         time_to,
+        float(max_lag_sec),
     )
 
 
@@ -229,6 +269,87 @@ def ensure_dataframe_loaded(uploaded) -> bool:
             st.session_state["df_all"] = df_all
 
     return st.session_state.get("df_all") is not None
+
+
+def ensure_contracts_loaded(uploaded_contracts) -> bool:
+    """Загружает отчёт по договорам в session_state."""
+    if uploaded_contracts is not None:
+        file_key = (uploaded_contracts.name, uploaded_contracts.size)
+        if st.session_state.get("contracts_upload_key") != file_key:
+            try:
+                with st.spinner("Чтение отчёта по договорам…"):
+                    df_c = load_contracts_excel(uploaded_contracts)
+            except ValueError as exc:
+                st.error(f"Ошибка загрузки договоров: {exc}")
+                return False
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Непредвиденная ошибка при чтении договоров: {exc}")
+                return False
+
+            if df_c.empty:
+                st.warning("Файл договоров пуст.")
+                return False
+
+            st.session_state["contracts_upload_key"] = file_key
+            st.session_state["contracts_upload_name"] = uploaded_contracts.name
+            st.session_state["df_contracts"] = df_c
+
+    return st.session_state.get("df_contracts") is not None
+
+
+def render_tab_contract_lag(df_orders, df_contracts, max_lag_sec: float) -> None:
+    """Вкладка: задержка между фиксацией заявки и временем договора."""
+    st.subheader("Задержка заявка → договор")
+    st.caption(
+        "Сопоставление по **коду инструмента**, **цене** и **объёму в лотах**. "
+        "**Задержка, мс** = время договора − время фиксации заявки. "
+        "Чем меньше задержка при выигранной сделке, тем «плотнее» вы успели к моменту заключения договора на рынке."
+    )
+
+    bad_c = df_contracts["Время_сек"].isna().sum() if "Время_сек" in df_contracts.columns else 0
+    if bad_c:
+        st.warning(f"Не распознано время договора у {bad_c} строк.")
+
+    matched, meta = match_orders_to_contracts(
+        df_orders,
+        df_contracts,
+        max_lag_sec=max_lag_sec,
+    )
+    summary = lag_summary(matched)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Договоров в файле", meta.get("contracts_total", 0))
+    c2.metric("Сопоставлено", meta.get("matched", 0))
+    c3.metric("Без пары", meta.get("unmatched_contracts", 0))
+    c4.metric("Заявка после договора", meta.get("late_orders", 0))
+
+    if summary:
+        s1, s2, s3, s4, s5 = st.columns(5)
+        s1.metric("Медиана, мс", summary.get("median_ms", "—"))
+        s2.metric("Мин., мс", summary.get("min_ms", "—"))
+        s3.metric("Среднее, мс", summary.get("mean_ms", "—"))
+        s4.metric("90%, мс", summary.get("p90_ms", "—"))
+        s5.metric("Макс., мс", summary.get("max_ms", "—"))
+        st.plotly_chart(fig_lag_histogram(matched), use_container_width=True)
+    else:
+        st.info(
+            "Нет сопоставленных пар с положительной задержкой. "
+            "Проверьте, что оба файла за один день и сессию, и что в договорах есть сделки по вашим инструментам/ценам."
+        )
+
+    if not matched.empty:
+        st.markdown("##### Таблица сопоставлений")
+        st.dataframe(matched.sort_values("Задержка, мс"), use_container_width=True, hide_index=True)
+
+    with st.expander("Как читать результат"):
+        st.markdown(
+            """
+- **Положительная задержка** — ваша заявка зафиксирована *раньше* времени договора на столько миллисекунд.
+- Если по договору на рынке вы **не** находите свою заявку с теми же параметрами — строка попадёт в «Без пары» (чужая сделка или другие цена/лоты).
+- **Опоздание** — заявка с теми же параметрами, но время фиксации *позже* времени договора: конкурент успел раньше.
+- Это оценка по выгрузкам терминала, не измерение сетевой задержки «клик → биржа».
+            """
+        )
 
 
 def render_summary_banner(summary: dict) -> None:
@@ -545,13 +666,17 @@ def main() -> None:
 
     (
         uploaded,
+        uploaded_contracts,
         use_basket,
         instrument_limit,
         day_limit_c6,
         filter_enabled,
         time_from,
         time_to,
+        max_lag_sec,
     ) = render_sidebar()
+
+    ensure_contracts_loaded(uploaded_contracts)
 
     if not ensure_dataframe_loaded(uploaded):
         st.info(
@@ -570,6 +695,7 @@ def main() -> None:
             3. Проверка критериев  
             4. Лимиты по инструментам  
             5. Рекомендации по стратегии  
+            6. **Задержка до договора** (нужен второй файл — отчёт по договорам)  
 
             По умолчанию анализируются заявки с **11:00 до 13:00**
             (пакет из «Корзины» около 10:45 исключается).
@@ -627,13 +753,14 @@ def main() -> None:
 
     summary = compute_summary(df)
 
-    tab_stats, tab_charts, tab_crit, tab_limits, tab_advice = st.tabs(
+    tab_stats, tab_charts, tab_crit, tab_limits, tab_advice, tab_lag = st.tabs(
         [
             "Общая статистика",
             "Графики",
             "Проверка критериев",
             "Лимиты по инструментам",
             "Рекомендации",
+            "Задержка до договора",
         ]
     )
 
@@ -656,6 +783,19 @@ def main() -> None:
             instrument_limit=instrument_limit,
             day_limit_c6=day_limit_c6,
         )
+
+    with tab_lag:
+        if st.session_state.get("df_contracts") is None:
+            st.info(
+                "Загрузите **отчёт по договорам** (.xlsx) в боковой панели — "
+                "колонки: «Время договора», «Код инструмента», «Цена», «Объем, лотов»."
+            )
+        else:
+            render_tab_contract_lag(
+                df,
+                st.session_state["df_contracts"],
+                max_lag_sec=max_lag_sec,
+            )
 
     # --- Экспорт отчёта ---
     st.markdown("---")

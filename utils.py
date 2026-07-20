@@ -434,8 +434,8 @@ def _validate_excel_bytes(data: bytes) -> None:
         )
 
 
-def load_excel(uploaded_file) -> pd.DataFrame:
-    """Читает Excel-файл (.xlsx) и возвращает подготовленный DataFrame."""
+def load_excel_raw(uploaded_file) -> pd.DataFrame:
+    """Читает .xlsx в DataFrame без проверки колонок заявок."""
     from io import BytesIO
 
     try:
@@ -450,8 +450,12 @@ def load_excel(uploaded_file) -> pd.DataFrame:
             "Убедитесь, что это настоящий .xlsx (откройте в Excel и при необходимости "
             "«Сохранить как» → Книга Excel)."
         ) from exc
+    return raw
 
+
+def load_excel(uploaded_file) -> pd.DataFrame:
+    """Читает Excel-файл (.xlsx) и возвращает подготовленный DataFrame."""
+    raw = load_excel_raw(uploaded_file)
     if raw.empty:
         raise ValueError("Файл не содержит данных.")
-
     return prepare_dataframe(raw)

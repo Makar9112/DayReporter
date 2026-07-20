@@ -1,0 +1,48 @@
+﻿# Зависимости и окружения
+.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Git / IDE (шум для индексации)
+.git/
+.idea/
+.vscode/
+
+# Секреты и локальный env
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Данные отчётов и крупные бинарники
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.parquet
+*.pkl
+*.pickle
+
+# Логи и временные файлы
+*.log
+tmp/
+temp/
+.cache/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Cursor / служебное
+.cursor/cursorfs-clone/
