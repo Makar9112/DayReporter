@@ -34,6 +34,7 @@ from criteria import (
     results_to_dataframe,
 )
 from strategy_advisor import PRIORITY_LABELS, build_strategy_report, tips_to_dataframe
+from utils import MEDIAN_HELP
 
 _STATUS_COLORS = {
     STATUS_VIOLATED: "#c0392b",
@@ -186,6 +187,7 @@ def build_full_html_report(
             <p class="lead">Для каждой покупки: время заявки минус время последнего договора по инструменту.</p>
             <p class="muted">Файл договоров: <b>{_esc(contracts_name or "—")}</b>. Окно поиска договора: {max_lag_sec:.0f} с.</p>
             {lag_metrics}
+            <div class="note-box">{_esc(MEDIAN_HELP.replace("**", ""))}</div>
             {lag_chart}
             <h3>Таблица задержек</h3>
             {lag_table}
@@ -221,6 +223,7 @@ def build_full_html_report(
         ("Макс. / 1 с", str(stats.get("max_1s", 0))),
         ("Медиана паузы", _fmt_ms_sec(stats.get("gap_median_ms"))),
     ])}
+    <div class="note-box">{_esc(MEDIAN_HELP.replace("**", ""))}</div>
     <h3>План на следующую сессию</h3>
     <ul class="plan">{plan_items}</ul>
     <h3>Карточки рекомендаций</h3>
@@ -418,6 +421,15 @@ def build_full_html_report(
       margin-left: 6px;
     }}
     ul.plan {{ margin-top: 8px; }}
+    .note-box {{
+      background: #fef9e7;
+      border: 1px solid #f9e79f;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin: 12px 0;
+      font-size: 0.94rem;
+      color: #5d4e37;
+    }}
     footer {{
       text-align: center;
       color: var(--muted);

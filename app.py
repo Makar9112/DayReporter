@@ -57,7 +57,13 @@ from contracts_lag import (
     match_orders_to_contracts,
 )
 from report_export import build_full_html_report
-from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
+from utils import (
+    MEDIAN_HELP,
+    MEDIAN_HELP_SHORT,
+    filter_by_session_time,
+    load_excel,
+    time_of_day_to_seconds,
+)
 
 
 # --- Настройки страницы ---
@@ -343,10 +349,23 @@ def render_tab_contract_lag(df_orders, df_contracts, max_lag_sec: float) -> None
 
         s1, s2, s3, s4, s5 = st.columns(5)
         s1.metric("Минимум", fmt_ms_and_sec(summary.get("after_min_ms")))
-        s2.metric("Медиана", fmt_ms_and_sec(summary.get("after_median_ms")))
-        s3.metric("Среднее", fmt_ms_and_sec(summary.get("after_mean_ms")))
-        s4.metric("90%", fmt_ms_and_sec(summary.get("after_p90_ms")))
+        s2.metric(
+            "Медиана",
+            fmt_ms_and_sec(summary.get("after_median_ms")),
+            help=MEDIAN_HELP_SHORT,
+        )
+        s3.metric(
+            "Среднее",
+            fmt_ms_and_sec(summary.get("after_mean_ms")),
+            help="Среднее арифметическое всех задержек; сильнее реагирует на редкие очень долгие реакции.",
+        )
+        s4.metric(
+            "90%",
+            fmt_ms_and_sec(summary.get("after_p90_ms")),
+            help="90% задержек быстрее этого значения; только 10% — медленнее.",
+        )
         s5.metric("Максимум", fmt_ms_and_sec(summary.get("after_max_ms")))
+        st.caption(MEDIAN_HELP)
 
         best_row = matched.sort_values("Задержка реакции, мс").iloc[0]
         st.success(
@@ -385,6 +404,7 @@ def render_tab_contract_lag(df_orders, df_contracts, max_lag_sec: float) -> None
 - Оценка по временам из выгрузок терминала, не замер сети «клик → биржа».
             """
         )
+        st.markdown(MEDIAN_HELP)
 
 
 def render_summary_banner(summary: dict) -> None:
@@ -549,7 +569,11 @@ def render_tab_recommendations(
 
     if stats.get("gap_median_ms") is not None:
         g1, g2, g3 = st.columns(3)
-        g1.metric("Медиана паузы", f"{stats['gap_median_ms']} мс")
+        g1.metric(
+            "Медиана паузы",
+            f"{stats['gap_median_ms']} мс",
+            help=MEDIAN_HELP_SHORT,
+        )
         g2.metric("Мин. пауза", f"{stats['gap_min_ms']} мс")
         g3.metric("Пауз < 100 мс", stats.get("gaps_under_100ms", 0))
 
