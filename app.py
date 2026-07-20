@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import io
-from datetime import time
+from datetime import datetime, time
 
 import streamlit as st
 
@@ -30,7 +30,6 @@ from criteria import (
     STATUS_OK,
     STATUS_POTENTIAL,
     STATUS_VIOLATED,
-    build_html_report,
     burst_diagnostics,
     results_to_dataframe,
     run_all_checks,
@@ -57,6 +56,7 @@ from contracts_lag import (
     load_contracts_excel,
     match_orders_to_contracts,
 )
+from report_export import build_full_html_report
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
 
 
@@ -787,6 +787,12 @@ def main() -> None:
         )
 
     summary = compute_summary(df)
+    if filter_enabled:
+        session_interval = (
+            f"{time_from.strftime('%H:%M:%S')} — {time_to.strftime('%H:%M:%S')}"
+        )
+    else:
+        session_interval = "без фильтра времени"
 
     tab_stats, tab_charts, tab_crit, tab_limits, tab_advice, tab_lag = st.tabs(
         [
@@ -835,21 +841,36 @@ def main() -> None:
     # --- Экспорт отчёта ---
     st.markdown("---")
     st.subheader("Отчёт")
-    html = build_html_report(
+    report_html = build_full_html_report(
         summary=summary,
+        df=df,
         results=results,
         limit_violations=limit_violations,
         instrument_limit=instrument_limit,
+        day_limit_c6=day_limit_c6,
+        use_basket=use_basket,
+        upload_name=st.session_state.get("upload_name", ""),
+        contracts_name=st.session_state.get("contracts_upload_name", ""),
+        session_interval=session_interval,
+        df_contracts=st.session_state.get("df_contracts"),
+        max_lag_sec=max_lag_sec,
     )
+    report_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     st.download_button(
-        label="Скачать отчёт (HTML)",
-        data=html.encode("utf-8"),
-        file_name="spimex_report.html",
+        label="Скачать полный отчёт (HTML)",
+        data=report_html.encode("utf-8"),
+        file_name=f"spimex_report_{report_stamp}.html",
         mime="text/html",
         key="download_html_report",
-        help="HTML-отчёт со сводкой, результатами критериев и лимитами. Можно открыть в браузере и распечатать.",
+        help=(
+            "Единый HTML-файл: статистика, графики, критерии, лимиты, "
+            "рекомендации и задержка до договора. Удобно читать в браузере и печатать (Ctrl+P)."
+        ),
     )
-    st.caption("Для печати страницы приложения используйте Ctrl+P в браузере.")
+    st.caption(
+        "Отчёт содержит все вкладки в одном документе с оглавлением и таблицами. "
+        "Для графиков при открытии файла нужен интернет (библиотека Plotly)."
+    )
 
 
 if __name__ == "__main__":
