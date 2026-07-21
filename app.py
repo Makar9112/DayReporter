@@ -1050,6 +1050,9 @@ def main() -> None:
         df_contracts=st.session_state.get("df_contracts"),
         df_contracts_session=df_contracts_session,
         max_lag_sec=max_lag_sec,
+        proliv_spread_ms=float(
+            st.session_state.get("limits_proliv_spread_ms", 5.0)
+        ),
     )
     report_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     st.download_button(
@@ -1059,7 +1062,7 @@ def main() -> None:
         mime="text/html",
         key="download_html_report",
         help=(
-            "Единый HTML-файл: статистика, графики, критерии, лимиты, "
+            "Единый HTML-файл: статистика, графики, критерии, лимиты (в т.ч. залив и проливы), "
             "рекомендации и задержка до договора. Удобно читать в браузере и печатать (Ctrl+P)."
         ),
     )

@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from trade_analytics import fig_instruments_limit, instruments_order_counts
+from utils import normalize_instrument_code
 
 ScopeMode = Literal["my", "all"]
 RankBy = Literal["activity", "orders", "fill_tons", "prolivs"]
@@ -46,7 +47,9 @@ def _attach_fill_names(merged: pd.DataFrame, fill_by_inst: pd.DataFrame) -> pd.D
         return merged
 
     name_fill = fill_by_inst[["Код инструмента", "Наименование_договора"]].copy()
-    name_fill["Код инструмента"] = name_fill["Код инструмента"].astype(str)
+    name_fill["Код инструмента"] = name_fill["Код инструмента"].map(
+        normalize_instrument_code
+    )
     merged = merged.merge(
         name_fill.rename(columns={"Наименование_договора": "_name_contract"}),
         on="Код инструмента",
@@ -111,7 +114,7 @@ def merge_orders_and_basis_fill(
     fill = fill_by_inst[
         ["Код инструмента", "Договоров", "Проливов", "Лоты", "Тонны залива"]
     ].copy()
-    fill["Код инструмента"] = fill["Код инструмента"].astype(str)
+    fill["Код инструмента"] = fill["Код инструмента"].map(normalize_instrument_code)
 
     if counts.empty and scope == "my":
         return pd.DataFrame(
@@ -133,7 +136,9 @@ def merge_orders_and_basis_fill(
         merged = _attach_fill_names(merged, fill_by_inst)
     else:
         counts = counts.copy()
-        counts["Код инструмента"] = counts["Код инструмента"].astype(str)
+        counts["Код инструмента"] = counts["Код инструмента"].map(
+            normalize_instrument_code
+        )
         how: Literal["left", "outer"] = "left" if scope == "my" else "outer"
         merged = counts.merge(fill, on="Код инструмента", how=how)
         merged = _attach_fill_names(merged, fill_by_inst)
@@ -240,15 +245,17 @@ def fig_instruments_limit_with_basis_fill(
 
     if not has_fill:
         if scope == "my" and top_n > 0 and len(merged) < len(instruments_order_counts(df)):
-            codes = set(merged["Код инструмента"].astype(str))
-            sub = df[df["Код инструмента"].astype(str).isin(codes)]
+            codes = set(merged["Код инструмента"].map(normalize_instrument_code))
+            sub = df[
+                df["Код инструмента"].map(normalize_instrument_code).isin(codes)
+            ]
             return fig_instruments_limit(sub, limit=limit)
         return fig_instruments_limit(df, limit=limit)
 
     merged = merged.copy()
     merged["Превышение"] = merged["Количество"] > limit
     order_colors = merged["Превышение"].map({True: "#C0392B", False: "#27AE60"})
-    codes = merged["Код инструмента"].astype(str)
+    codes = merged["Код инструмента"].map(normalize_instrument_code)
     n = len(merged)
     scope_note = "ваши инструменты" if scope == "my" else "все из договоров"
     top_note = f", топ {n}" if top_n > 0 and n <= top_n else f", {n} шт."
@@ -353,7 +360,7 @@ def _fig_horizontal_dual(
 ) -> go.Figure:
     codes_list = list(reversed(codes.tolist()))
     m = merged.copy()
-    m["Код инструмента"] = m["Код инструмента"].astype(str)
+    m["Код инструмента"] = m["Код инструмента"].map(normalize_instrument_code)
     m = m.set_index("Код инструмента").loc[codes_list].reset_index()
     colors = m["Количество"].gt(limit).map({True: "#C0392B", False: "#27AE60"})
     y_labels = _y_labels_with_names(m)
@@ -451,7 +458,7 @@ def _fig_grouped(
             hovertemplate=(
                 "%{x}<br>Лотов: %{y:.0f}<br>Тонн: %{customdata[0]:.0f}<extra></extra>"
             ),
-            customdata=list(merged["Тонны залива"]),
+            customdata=list(zip(merged["Тонны залива"].tolist())),
         )
     )
     fig.add_hline(

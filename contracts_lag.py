@@ -16,6 +16,7 @@ from utils import (
     format_timedelta,
     load_excel_raw,
     normalize_columns,
+    normalize_instrument_code,
     parse_times_column,
     pick_first_nonempty,
     timedelta_to_seconds,
@@ -67,6 +68,10 @@ def prepare_contracts_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(msg)
 
     result = df.copy()
+    if "Код инструмента" in result.columns:
+        result["Код инструмента"] = result["Код инструмента"].map(
+            normalize_instrument_code
+        )
     result["Время_td"] = parse_times_column(result["Время договора"])
     result["Время_сек"] = result["Время_td"].map(timedelta_to_seconds)
 
@@ -99,7 +104,9 @@ def _contracts_by_instrument(df_contracts: pd.DataFrame) -> Dict[str, pd.DataFra
     out: Dict[str, pd.DataFrame] = {}
     work = df_contracts.dropna(subset=["Время_сек", "Код инструмента"]).copy()
     for code, group in work.groupby("Код инструмента", sort=False):
-        out[str(code)] = group.sort_values("Время_сек").reset_index(drop=True)
+        out[normalize_instrument_code(code)] = group.sort_values(
+            "Время_сек"
+        ).reset_index(drop=True)
     return out
 
 
@@ -149,7 +156,7 @@ def match_orders_to_contracts(
 
     for _, o in orders_sorted.iterrows():
         o_time = float(o["Время_сек"])
-        code = str(o["Код инструмента"])
+        code = normalize_instrument_code(o["Код инструмента"])
         inst_contracts = by_inst.get(code)
         if inst_contracts is None or inst_contracts.empty:
             meta["unmatched_orders"] += 1
@@ -339,7 +346,7 @@ def aggregate_basis_fill_by_instrument(
 
     rows: List[dict] = []
     for code, group in work.groupby("Код инструмента", sort=False):
-        code_s = str(code)
+        code_s = normalize_instrument_code(code)
         if name_col:
             name = pick_first_nonempty(group[name_col])
         else:
@@ -394,7 +401,8 @@ def contracts_detail_for_instrument(
         return pd.DataFrame(columns=cols_out)
 
     work = df_contracts[
-        df_contracts["Код инструмента"].astype(str) == str(instrument_code)
+        df_contracts["Код инструмента"].map(normalize_instrument_code)
+        == normalize_instrument_code(instrument_code)
     ].copy()
     if work.empty:
         return pd.DataFrame(columns=cols_out)

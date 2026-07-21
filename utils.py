@@ -197,6 +197,25 @@ def timedelta_to_seconds(td) -> Optional[float]:
     return None
 
 
+def normalize_instrument_code(value) -> str:
+    """
+    Единый строковый ключ кода инструмента для слияния журнала и договоров.
+    100, 100.0 и «100» → «100»; буквенные коды не меняются.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    text = str(value).strip().replace("\xa0", "").replace(" ", "")
+    if not text or text.lower() == "nan":
+        return ""
+    try:
+        num = float(text.replace(",", "."))
+        if num == int(num):
+            return str(int(num))
+    except ValueError:
+        pass
+    return text
+
+
 def pick_first_nonempty(series: pd.Series) -> str:
     """Первое непустое значение в группе (наименование инструмента из журнала)."""
     for raw in series:
@@ -325,6 +344,8 @@ def prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(msg)
 
     result = df.copy()
+    if "Код инструмента" in result.columns:
+        result["Код инструмента"] = result["Код инструмента"].map(normalize_instrument_code)
     result["Время_td"] = parse_times_column(result["Время фиксации заявки"])
     result["Время_сек"] = result["Время_td"].map(timedelta_to_seconds)
 

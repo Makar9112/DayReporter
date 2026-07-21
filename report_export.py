@@ -22,8 +22,12 @@ from trade_analytics import (
     instruments_order_counts,
     status_breakdown,
 )
-from basis_fill_charts import fig_instruments_limit_with_basis_fill
+from basis_fill_charts import (
+    fig_instruments_limit_with_basis_fill,
+    merge_orders_and_basis_fill,
+)
 from contracts_lag import (
+    DEFAULT_PROLIV_SPREAD_MS,
     aggregate_basis_fill_by_instrument,
     fig_lag_histogram,
     lag_summary,
@@ -125,6 +129,7 @@ def build_full_html_report(
     df_contracts: Optional[pd.DataFrame] = None,
     df_contracts_session: Optional[pd.DataFrame] = None,
     max_lag_sec: float = 120.0,
+    proliv_spread_ms: float = DEFAULT_PROLIV_SPREAD_MS,
 ) -> str:
     """Полный отчёт: статистика, графики, критерии, лимиты, рекомендации, задержка."""
     generated = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -157,7 +162,10 @@ def build_full_html_report(
     charts_html = ""
     fill_for_limits = None
     if df_contracts_session is not None and not df_contracts_session.empty:
-        fill_for_limits = aggregate_basis_fill_by_instrument(df_contracts_session)
+        fill_for_limits = aggregate_basis_fill_by_instrument(
+            df_contracts_session,
+            proliv_spread_ms=proliv_spread_ms,
+        )
     limits_fig = fig_instruments_limit(df, limit=instrument_limit)
     if fill_for_limits is not None and not fill_for_limits.empty:
         limits_fig = fig_instruments_limit_with_basis_fill(
@@ -259,7 +267,73 @@ def build_full_html_report(
         limits_body += _df_table(limit_violations)
     else:
         limits_body += f'<p class="ok">Превышений лимита {instrument_limit} не обнаружено.</p>'
-    limits_body += "<h3>Все инструменты</h3>" + _df_table(inst_counts, max_rows=200)
+
+    if fill_for_limits is not None and not fill_for_limits.empty:
+        limits_body += (
+            f'<p class="muted">Залив и проливы — по договорам в том же интервале, '
+            f"что заявки. Допуск пролива: <b>{proliv_spread_ms:g} мс</b> "
+            f"(бензин 60 т/вагон, дизель 65 т/вагон).</p>"
+        )
+        fill_metrics = _metrics_grid(
+            [
+                ("Инструментов с заливом", str(len(fill_for_limits))),
+                (
+                    "Суммарный залив, т",
+                    f"{float(fill_for_limits['Тонны залива'].sum()):.0f}",
+                ),
+                (
+                    "Всего проливов",
+                    str(int(fill_for_limits["Проливов"].sum())),
+                ),
+                (
+                    "Договоров (залив)",
+                    str(int(fill_for_limits["Договоров"].sum())),
+                ),
+            ]
+        )
+        limits_body += fill_metrics
+        limits_body += (
+            '<p class="muted">График «Лимиты по инструментам» (раздел 2): '
+            "ваши коды, топ 20, две панели (заявки + тонны залива).</p>"
+        )
+        merged_limits = merge_orders_and_basis_fill(
+            df, fill_for_limits, scope="my"
+        )
+        if merged_limits.empty:
+            merged_limits = inst_counts.copy()
+        merged_limits = merged_limits.copy()
+        merged_limits["Превышение"] = merged_limits["Количество"].astype(int).map(
+            lambda n: "Да" if n > instrument_limit else "Нет"
+        )
+        display_cols = [
+            c
+            for c in [
+                "Код инструмента",
+                "Наименование",
+                "Количество",
+                "Превышение",
+                "Договоров",
+                "Проливов",
+                "Лоты",
+                "Тонны залива",
+            ]
+            if c in merged_limits.columns
+        ]
+        rename_limits = {
+            "Договоров": "Договоров (залив)",
+            "Проливов": "Проливов",
+            "Лоты": "Вагонов (лот)",
+            "Тонны залива": "Залив, т",
+        }
+        show_limits = merged_limits[display_cols].rename(columns=rename_limits)
+        limits_body += (
+            "<h3>Заявки и залив по инструментам (ваши коды)</h3>"
+            + _df_table(show_limits, max_rows=200)
+        )
+    else:
+        limits_body += "<h3>Все инструменты (заявки)</h3>" + _df_table(
+            inst_counts, max_rows=200
+        )
 
     summary_metrics = _metrics_grid(
         [
