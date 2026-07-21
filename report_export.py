@@ -164,7 +164,10 @@ def build_full_html_report(
             df,
             fill_for_limits,
             limit=instrument_limit,
-            variant="dual_bars",
+            variant="split_panels",
+            scope="my",
+            top_n=20,
+            rank_by="activity",
         )
     chart_specs = [
         ("chart-status", fig_status_pie(df), "Статусы заявок"),

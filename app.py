@@ -24,7 +24,11 @@ from analytics import (
     instruments_order_counts,
     status_breakdown,
 )
-from basis_fill_charts import fig_instruments_limit_with_basis_fill
+from basis_fill_charts import (
+    fig_instruments_limit_with_basis_fill,
+    merge_orders_and_basis_fill,
+    prepare_limits_chart_frame,
+)
 from criteria import (
     STATUS_BASKET,
     STATUS_INFO,
@@ -714,24 +718,61 @@ def render_tab_limits(
         st.success(f"Ни один инструмент не превысил лимит {instrument_limit} заявок.")
 
     if fill_summary is not None and not fill_summary.empty:
+        st.markdown("##### График: заявки и залив")
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            scope_all = st.checkbox(
+                "Все инструменты из договоров",
+                value=False,
+                help=(
+                    "По умолчанию — только коды из вашего журнала в выбранном интервале. "
+                    "Включите, чтобы показать весь рынок из файла договоров (может быть очень много)."
+                ),
+                key="limits_scope_all",
+            )
+        with fc2:
+            top_n = st.selectbox(
+                "На графике",
+                options=[10, 15, 20, 30, 0],
+                index=2,
+                format_func=lambda x: "Топ {}".format(x) if x else "Без ограничения",
+                key="limits_top_n",
+            )
+        with fc3:
+            rank_by = st.selectbox(
+                "Сортировка топа",
+                options=[
+                    ("activity", "По активности"),
+                    ("orders", "По заявкам"),
+                    ("fill_tons", "По заливу, т"),
+                ],
+                format_func=lambda x: x[1],
+                key="limits_rank_by",
+            )[0]
+
         chart_variant = st.radio(
-            "Вид графика (заявки + залив базиса)",
+            "Вид графика",
             options=[
-                ("dual_bars", "Две оси Y: заявки (столбики) + тонны залива (столбики)"),
-                ("bars_line", "Две оси Y: заявки (столбики) + тонны залива (линия)"),
-                ("grouped", "Одна ось: заявки (шт) и вагоны (лот) рядом"),
+                ("split_panels", "Две панели: заявки сверху, залив снизу (рекомендуется)"),
+                ("horizontal", "Горизонтальные столбики (удобно для кодов)"),
+                ("dual_bars", "Две оси Y: заявки + тонны (столбики)"),
+                ("bars_line", "Две оси Y: заявки + тонны (линия)"),
+                ("grouped", "Заявки (шт) и вагоны (лот) рядом"),
             ],
             format_func=lambda x: x[1],
             horizontal=False,
             key="limits_chart_variant",
         )
-        variant_key = chart_variant[0]
+        scope = "all" if scope_all else "my"
         st.plotly_chart(
             fig_instruments_limit_with_basis_fill(
                 df,
                 fill_summary,
                 limit=instrument_limit,
-                variant=variant_key,
+                variant=chart_variant[0],
+                scope=scope,
+                top_n=int(top_n),
+                rank_by=rank_by,
             ),
             use_container_width=True,
         )
@@ -739,35 +780,44 @@ def render_tab_limits(
         st.plotly_chart(fig_instruments_limit(df, limit=instrument_limit), use_container_width=True)
 
     with st.expander("Полная таблица по инструментам"):
-        table = counts.copy()
-        table["Превышение"] = table["Количество"].map(
-            lambda n: "Да" if n > instrument_limit else "Нет"
+        table_scope = st.checkbox(
+            "В таблице — все инструменты из договоров",
+            value=False,
+            key="limits_table_scope_all",
         )
         if fill_summary is not None and not fill_summary.empty:
-            fs = fill_summary.rename(
-                columns={
-                    "Договоров": "Договоров (залив)",
-                    "Лоты": "Вагонов (лот)",
-                    "Тонны залива": "Залив, т",
-                }
+            table = merge_orders_and_basis_fill(
+                df,
+                fill_summary,
+                scope="all" if table_scope else "my",
             )
-            table = table.merge(
-                fs[
-                    [
-                        "Код инструмента",
-                        "Договоров (залив)",
-                        "Вагонов (лот)",
-                        "Залив, т",
-                    ]
-                ],
-                on="Код инструмента",
-                how="outer",
-            )
-            table["Количество"] = table["Количество"].fillna(0).astype(int)
-            table["Превышение"] = table["Количество"].map(
-                lambda n: "Да" if n > instrument_limit else "Нет"
-            )
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        else:
+            table = counts.copy()
+        if table.empty:
+            table = counts.copy()
+        table["Превышение"] = table["Количество"].astype(int).map(
+            lambda n: "Да" if n > instrument_limit else "Нет"
+        )
+        display_cols = [
+            c
+            for c in [
+                "Код инструмента",
+                "Наименование",
+                "Количество",
+                "Превышение",
+                "Договоров",
+                "Лоты",
+                "Тонны залива",
+            ]
+            if c in table.columns
+        ]
+        rename = {
+            "Договоров": "Договоров (залив)",
+            "Лоты": "Вагонов (лот)",
+            "Тонны залива": "Залив, т",
+        }
+        show = table[display_cols].rename(columns=rename)
+        st.dataframe(show, use_container_width=True, hide_index=True)
 
     if (
         df_contracts_session is not None
@@ -776,7 +826,16 @@ def render_tab_limits(
         and not fill_summary.empty
     ):
         with st.expander("Договоры по инструменту (детализация залива)"):
-            codes = fill_summary["Код инструмента"].astype(str).tolist()
+            detail_frame = prepare_limits_chart_frame(
+                df,
+                fill_summary,
+                scope="my",
+                top_n=0,
+                rank_by="activity",
+            )
+            codes = detail_frame["Код инструмента"].astype(str).tolist()
+            if not codes:
+                codes = fill_summary["Код инструмента"].astype(str).tolist()
             pick = st.selectbox("Код инструмента", options=codes, key="fill_detail_code")
             detail = contracts_detail_for_instrument(df_contracts_session, pick)
             if detail.empty:
