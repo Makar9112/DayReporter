@@ -212,6 +212,63 @@ def _chart_height(n: int, *, per_row: int = 28, base: int = 120) -> int:
     return min(max(base + n * per_row, 280), 900)
 
 
+def _add_proliv_dash_markers(
+    fig: go.Figure,
+    codes,
+    prolivs: pd.Series,
+    *,
+    row: int,
+    col: int,
+) -> None:
+    """Пунктир от нуля до числа проливов над каждым кодом на панели заявок."""
+    seg_x: list = []
+    seg_y: list = []
+    label_x: list = []
+    label_y: list = []
+    label_text: list = []
+
+    for code, raw in zip(codes, prolivs):
+        p = int(pd.to_numeric(raw, errors="coerce") or 0)
+        if p <= 0:
+            continue
+        seg_x.extend([code, code, None])
+        seg_y.extend([0, p, None])
+        label_x.append(code)
+        label_y.append(p)
+        label_text.append(str(p))
+
+    if not seg_x:
+        return
+
+    fig.add_trace(
+        go.Scatter(
+            x=seg_x,
+            y=seg_y,
+            mode="lines",
+            line=dict(color="#7D3C98", width=2, dash="dash"),
+            name="Проливов, шт",
+            hovertemplate="%{x}<br>Проливов: %{y}<extra></extra>",
+            showlegend=True,
+        ),
+        row=row,
+        col=col,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=label_x,
+            y=label_y,
+            mode="text",
+            text=label_text,
+            textposition="top center",
+            textfont=dict(size=11, color="#7D3C98"),
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=row,
+        col=col,
+    )
+
+
 def fig_instruments_limit_with_basis_fill(
     df: pd.DataFrame,
     fill_by_inst: Optional[pd.DataFrame],
@@ -291,7 +348,10 @@ def _fig_split_panels(
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.12,
-        subplot_titles=("Ваши заявки, шт", "Залив базиса, т (число проливов — в подсказке)"),
+        subplot_titles=(
+            "Ваши заявки, шт (фиолетовый пунктир — число проливов)",
+            "Залив базиса, т",
+        ),
     )
     fig.add_trace(
         go.Bar(
@@ -303,10 +363,12 @@ def _fig_split_panels(
             name="Заявки",
             customdata=merged["Наименование"].replace("", "—"),
             hovertemplate="%{x}<br>%{customdata}<br>Заявок: %{y}<extra></extra>",
+            showlegend=True,
         ),
         row=1,
         col=1,
     )
+    _add_proliv_dash_markers(fig, codes, merged["Проливов"], row=1, col=1)
     fig.add_hline(
         y=limit,
         line_dash="dash",
@@ -345,8 +407,9 @@ def _fig_split_panels(
     fig.update_layout(
         title=f"Заявки и залив ({scope_note}{top_note})",
         height=_chart_height(n, per_row=22, base=200),
-        showlegend=False,
-        margin=dict(t=80, b=60, l=50, r=30),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(t=90, b=60, l=50, r=30),
     )
     fig.update_xaxes(tickangle=-45, row=2, col=1)
     fig.update_xaxes(title_text="Код инструмента", row=2, col=1)

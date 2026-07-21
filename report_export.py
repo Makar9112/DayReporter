@@ -29,6 +29,7 @@ from basis_fill_charts import (
 from contracts_lag import (
     DEFAULT_PROLIV_SPREAD_MS,
     aggregate_basis_fill_by_instrument,
+    contracts_detail_for_instrument,
     fig_lag_histogram,
     lag_summary,
     match_orders_to_contracts,
@@ -114,6 +115,73 @@ def _fmt_ms_sec(ms: Optional[float]) -> str:
     return f"{ms} мс ({round(float(ms) / 1000, 3)} с)"
 
 
+def _fill_aggregate_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Таблица залива/проливов по кодам (как агрегат по договорам)."""
+    if df is None or df.empty:
+        return df
+    cols = [
+        c
+        for c in [
+            "Код инструмента",
+            "Наименование_договора",
+            "Договоров",
+            "Проливов",
+            "Лоты",
+            "Тонны залива",
+        ]
+        if c in df.columns
+    ]
+    rename = {
+        "Наименование_договора": "Наименование",
+        "Договоров": "Договоров (залив)",
+        "Лоты": "Вагонов (лот)",
+        "Тонны залива": "Залив, т",
+    }
+    return df[cols].rename(columns=rename)
+
+
+def _merged_limits_table(
+    df: pd.DataFrame,
+    fill_by_inst: pd.DataFrame,
+    instrument_limit: int,
+    inst_counts: pd.DataFrame,
+) -> pd.DataFrame:
+    merged = merge_orders_and_basis_fill(df, fill_by_inst, scope="my")
+    if merged.empty:
+        merged = merge_orders_and_basis_fill(df, fill_by_inst, scope="all")
+    if merged.empty:
+        merged = _fill_aggregate_table(fill_by_inst).copy()
+        merged["Количество"] = 0
+        merged["Наименование"] = merged.get("Наименование", "")
+        if "Превышение" not in merged.columns:
+            merged["Превышение"] = "Нет"
+        return merged
+    merged = merged.copy()
+    merged["Превышение"] = merged["Количество"].astype(int).map(
+        lambda n: "Да" if n > instrument_limit else "Нет"
+    )
+    display_cols = [
+        c
+        for c in [
+            "Код инструмента",
+            "Наименование",
+            "Количество",
+            "Превышение",
+            "Договоров",
+            "Проливов",
+            "Лоты",
+            "Тонны залива",
+        ]
+        if c in merged.columns
+    ]
+    rename_limits = {
+        "Договоров": "Договоров (залив)",
+        "Лоты": "Вагонов (лот)",
+        "Тонны залива": "Залив, т",
+    }
+    return merged[display_cols].rename(columns=rename_limits)
+
+
 def build_full_html_report(
     *,
     summary: Dict[str, Any],
@@ -177,13 +245,19 @@ def build_full_html_report(
             top_n=20,
             rank_by="activity",
         )
+    limits_caption = "Лимиты по инструментам"
+    if fill_for_limits is not None and not fill_for_limits.empty:
+        limits_caption = (
+            "Лимиты: заявки и залив (проливы — фиолетовый пунктир на верхней панели "
+            "и таблицы раздела 4)"
+        )
     chart_specs = [
         ("chart-status", fig_status_pie(df), "Статусы заявок"),
         ("chart-basis", fig_basis_pie(df), "Базисы поставки"),
         ("chart-top", fig_top_instruments(df, top_n=10), "Топ инструментов"),
         ("chart-hour", fig_hourly_distribution(df), "Распределение по времени"),
         ("chart-corridor", fig_corridor_deviations(df), "Коридор цен"),
-        ("chart-limits", limits_fig, "Лимиты по инструментам"),
+        ("chart-limits", limits_fig, limits_caption),
     ]
     for div_id, fig, caption in chart_specs:
         div = _plot_div(fig, div_id)
@@ -293,42 +367,48 @@ def build_full_html_report(
         )
         limits_body += fill_metrics
         limits_body += (
-            '<p class="muted">График «Лимиты по инструментам» (раздел 2): '
-            "ваши коды, топ 20, две панели (заявки + тонны залива).</p>"
+            "<h3>Сводка залива и проливов по договорам (интервал сессии)</h3>"
+            + _df_table(_fill_aggregate_table(fill_for_limits), max_rows=300)
         )
-        merged_limits = merge_orders_and_basis_fill(
-            df, fill_for_limits, scope="my"
-        )
-        if merged_limits.empty:
-            merged_limits = inst_counts.copy()
-        merged_limits = merged_limits.copy()
-        merged_limits["Превышение"] = merged_limits["Количество"].astype(int).map(
-            lambda n: "Да" if n > instrument_limit else "Нет"
-        )
-        display_cols = [
-            c
-            for c in [
-                "Код инструмента",
-                "Наименование",
-                "Количество",
-                "Превышение",
-                "Договоров",
-                "Проливов",
-                "Лоты",
-                "Тонны залива",
-            ]
-            if c in merged_limits.columns
-        ]
-        rename_limits = {
-            "Договоров": "Договоров (залив)",
-            "Проливов": "Проливов",
-            "Лоты": "Вагонов (лот)",
-            "Тонны залива": "Залив, т",
-        }
-        show_limits = merged_limits[display_cols].rename(columns=rename_limits)
         limits_body += (
-            "<h3>Заявки и залив по инструментам (ваши коды)</h3>"
+            '<p class="muted">График «Лимиты» (раздел 2): '
+            "ваши коды, топ 20, две панели; на верхней — пунктир «проливов», "
+            f"на нижней в подсказке — детали (допуск {proliv_spread_ms:g} мс).</p>"
+        )
+        show_limits = _merged_limits_table(
+            df, fill_for_limits, instrument_limit, inst_counts
+        )
+        limits_body += (
+            "<h3>Заявки и залив по вашим кодам</h3>"
             + _df_table(show_limits, max_rows=200)
+        )
+        detail_html = ""
+        for code in fill_for_limits["Код инструмента"].head(10):
+            det = contracts_detail_for_instrument(
+                df_contracts_session,
+                str(code),
+                proliv_spread_ms=proliv_spread_ms,
+            )
+            if det.empty:
+                continue
+            detail_html += (
+                f"<h4>Код {_esc(code)}</h4>{_df_table(det, max_rows=400)}"
+            )
+        if detail_html:
+            limits_body += (
+                "<h3>Детализация: договоры и номер пролива (топ-10 по заливу)</h3>"
+                f'<p class="muted">Колонка «Пролив» — номер «пачки» сделок '
+                f"(соседние договоры ближе {proliv_spread_ms:g} мс — один пролив).</p>"
+                + detail_html
+            )
+    elif df_contracts is not None and not df_contracts.empty:
+        limits_body += (
+            "<p class=\"muted\">Файл договоров загружен, но в выбранном интервале "
+            "времени нет договоров — залив и проливы в отчёт не попали. "
+            "Проверьте фильтр сессии (11:00–13:00) или отключите его в сайдбаре.</p>"
+        )
+        limits_body += "<h3>Все инструменты (заявки)</h3>" + _df_table(
+            inst_counts, max_rows=200
         )
     else:
         limits_body += "<h3>Все инструменты (заявки)</h3>" + _df_table(
