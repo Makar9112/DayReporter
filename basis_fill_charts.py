@@ -14,6 +14,8 @@ from plotly.subplots import make_subplots
 from trade_analytics import fig_instruments_limit, instruments_order_counts
 from utils import detect_basis, normalize_instrument_code, pick_first_nonempty
 
+from instrument_stack_limits import attach_stack_limits_to_display_table
+
 ScopeMode = Literal["my", "all"]
 RankBy = Literal["activity", "orders", "fill_tons", "prolivs"]
 ChartVariant = Literal[
@@ -232,6 +234,7 @@ def limits_instruments_display_table(
     top_n: int = 20,
     rank_by: RankBy = "activity",
     instrument_limit: int = 250,
+    stack_limits: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Сводная таблица для вкладки лимитов и HTML-отчёта:
@@ -252,7 +255,8 @@ def limits_instruments_display_table(
         "Превышение лимита",
     ]
     if frame.empty:
-        return pd.DataFrame(columns=empty_cols)
+        empty = pd.DataFrame(columns=empty_cols)
+        return attach_stack_limits_to_display_table(empty, stack_limits)
 
     basis_map = _basis_by_instrument_from_orders(df)
     work = frame.copy()
@@ -288,7 +292,7 @@ def limits_instruments_display_table(
     )
     work["Лоты"] = pd.to_numeric(work.get("Лоты"), errors="coerce").fillna(0).round(0)
 
-    return pd.DataFrame(
+    base = pd.DataFrame(
         {
             "Код инструмента": work["Код инструмента"].map(normalize_instrument_code),
             "Наименование инструмента": work["Наименование"].fillna(""),
@@ -301,6 +305,7 @@ def limits_instruments_display_table(
             "Превышение лимита": work["Превышение лимита"],
         }
     ).reset_index(drop=True)
+    return attach_stack_limits_to_display_table(base, stack_limits)
 
 
 def prepare_limits_chart_frame(

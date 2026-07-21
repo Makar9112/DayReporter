@@ -22,6 +22,7 @@ DayReporter/
 ├── app.py               # UI Streamlit, вкладки, session_state, скачивание отчёта
 ├── trade_analytics.py   # сводка, графики Plotly (НЕ называть analytics.py — конфликт с PyPI на Cloud)
 ├── basis_fill_charts.py # графики «заявки + залив» на вкладке лимитов (Cloud-safe)
+├── instrument_stack_limits.py # справочник Max orders / лот по Security code (.properties)
 ├── criteria.py          # критерии №1–№6, burst-диагностика, простой HTML (legacy)
 ├── contracts_lag.py     # договоры, задержка, залив/проливы, wagon_tons_per_lot
 ├── report_export.py     # полный HTML-отчёт (Plotly через CDN)
@@ -148,6 +149,7 @@ DayReporter/
 - «Очистить загруженные данные» сбрасывает оба файла.
 - «Скачать отчёт» не сбрасывает анализ.
 - `limits_proliv_spread_ms` — допуск пролива на вкладке лимитов; передаётся в HTML-отчёт.
+- `df_stack_limits` — справочник Max orders по Security code (файл в сайдбаре).
 
 ### Экспорт отчёта (кратко)
 

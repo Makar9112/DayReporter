@@ -65,6 +65,7 @@ from contracts_lag import (
     match_orders_to_contracts,
 )
 from help_texts import MEDIAN_HELP, MEDIAN_HELP_SHORT
+from instrument_stack_limits import load_stack_limits_file
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
 from report_export import build_full_html_report
 
@@ -144,12 +145,25 @@ def render_sidebar():
         key=f"contracts_uploader_{st.session_state.get('contracts_uploader_reset', 0)}",
     )
 
+    uploaded_stack_limits = st.sidebar.file_uploader(
+        "Лимиты по кодам (.properties, .txt, .csv)",
+        type=["properties", "txt", "csv", "tsv"],
+        help=(
+            "Таблица с колонками Security code, Max orders, Order size, Max quantity. "
+            "Для сравнения с числом заявок в журнале (Δ в таблице лимитов)."
+        ),
+        key=f"stack_limits_uploader_{st.session_state.get('stack_limits_uploader_reset', 0)}",
+    )
+
     if st.session_state.get("df_all") is not None:
         name = st.session_state.get("upload_name", "файл")
         st.sidebar.caption(f"Заявки: **{name}**")
     if st.session_state.get("df_contracts") is not None:
         cname = st.session_state.get("contracts_upload_name", "договоры")
         st.sidebar.caption(f"Договоры: **{cname}**")
+    if st.session_state.get("df_stack_limits") is not None:
+        lname = st.session_state.get("stack_limits_upload_name", "лимиты")
+        st.sidebar.caption(f"Лимиты по кодам: **{lname}**")
 
     if st.session_state.get("df_all") is not None or st.session_state.get("df_contracts") is not None:
         if st.sidebar.button("Очистить загруженные данные", use_container_width=True):
@@ -161,11 +175,17 @@ def render_sidebar():
                 "df_contracts",
                 "contracts_upload_name",
                 "contracts_upload_key",
+                "df_stack_limits",
+                "stack_limits_upload_name",
+                "stack_limits_upload_key",
             ):
                 st.session_state.pop(key, None)
             st.session_state["uploader_reset"] = st.session_state.get("uploader_reset", 0) + 1
             st.session_state["contracts_uploader_reset"] = (
                 st.session_state.get("contracts_uploader_reset", 0) + 1
+            )
+            st.session_state["stack_limits_uploader_reset"] = (
+                st.session_state.get("stack_limits_uploader_reset", 0) + 1
             )
             st.rerun()
 
@@ -241,6 +261,7 @@ def render_sidebar():
     return (
         uploaded,
         uploaded_contracts,
+        uploaded_stack_limits,
         use_basket,
         int(instrument_limit),
         int(day_limit_c6),
@@ -307,6 +328,32 @@ def ensure_contracts_loaded(uploaded_contracts) -> bool:
             st.session_state["df_contracts"] = df_c
 
     return st.session_state.get("df_contracts") is not None
+
+
+def ensure_stack_limits_loaded(uploaded_stack_limits) -> bool:
+    """Справочник Max orders / лот на заявку по коду инструмента."""
+    if uploaded_stack_limits is not None:
+        file_key = (uploaded_stack_limits.name, uploaded_stack_limits.size)
+        if st.session_state.get("stack_limits_upload_key") != file_key:
+            try:
+                with st.spinner("Чтение лимитов по кодам…"):
+                    df_l = load_stack_limits_file(uploaded_stack_limits)
+            except ValueError as exc:
+                st.error(f"Ошибка файла лимитов: {exc}")
+                return False
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Непредвиденная ошибка при чтении лимитов: {exc}")
+                return False
+
+            if df_l.empty:
+                st.warning("В файле лимитов нет распознанных строк.")
+                return False
+
+            st.session_state["stack_limits_upload_key"] = file_key
+            st.session_state["stack_limits_upload_name"] = uploaded_stack_limits.name
+            st.session_state["df_stack_limits"] = df_l
+
+    return st.session_state.get("df_stack_limits") is not None
 
 
 def render_tab_contract_lag(df_orders, df_contracts, max_lag_sec: float) -> None:
@@ -686,6 +733,7 @@ def render_tab_limits(
     df,
     instrument_limit: int,
     df_contracts_session=None,
+    df_stack_limits=None,
 ):
     """Вкладка «Лимиты по инструментам»."""
     st.subheader("Лимит заявок на один инструмент (стакан)")
@@ -800,10 +848,11 @@ def render_tab_limits(
             top_n=int(top_n),
             rank_by=rank_by,
             instrument_limit=instrument_limit,
+            stack_limits=df_stack_limits,
         )
         st.caption(
-            "«Продано, т» — суммарный залив по договорам в интервале сессии; "
-            "«Заявок отправлено» — число фиксаций в журнале по коду."
+            "«Продано, т» — залив по договорам; «Заявок отправлено» — журнал. "
+            "При загрузке файла лимитов — Max orders, лот/макс. лотов и Δ заявок − max orders."
         )
         st.dataframe(summary_table, use_container_width=True, hide_index=True)
     elif has_fill_data:
@@ -907,6 +956,7 @@ def main() -> None:
     (
         uploaded,
         uploaded_contracts,
+        uploaded_stack_limits,
         use_basket,
         instrument_limit,
         day_limit_c6,
@@ -917,6 +967,7 @@ def main() -> None:
     ) = render_sidebar()
 
     ensure_contracts_loaded(uploaded_contracts)
+    ensure_stack_limits_loaded(uploaded_stack_limits)
 
     if not ensure_dataframe_loaded(uploaded):
         st.info(
@@ -1034,6 +1085,7 @@ def main() -> None:
             df,
             instrument_limit=instrument_limit,
             df_contracts_session=df_contracts_session,
+            df_stack_limits=st.session_state.get("df_stack_limits"),
         )
 
     with tab_advice:
@@ -1077,6 +1129,7 @@ def main() -> None:
         proliv_spread_ms=float(
             st.session_state.get("limits_proliv_spread_ms", 5.0)
         ),
+        df_stack_limits=st.session_state.get("df_stack_limits"),
     )
     report_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     st.download_button(

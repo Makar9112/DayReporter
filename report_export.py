@@ -156,6 +156,7 @@ def build_full_html_report(
     df_contracts_session: Optional[pd.DataFrame] = None,
     max_lag_sec: float = 120.0,
     proliv_spread_ms: float = DEFAULT_PROLIV_SPREAD_MS,
+    df_stack_limits: Optional[pd.DataFrame] = None,
 ) -> str:
     """Полный отчёт: статистика, графики, критерии, лимиты, рекомендации, задержка."""
     generated = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -378,6 +379,7 @@ def build_full_html_report(
         top_n=20,
         rank_by="activity",
         instrument_limit=instrument_limit,
+        stack_limits=df_stack_limits,
     )
     limits_body += (
         "<h3>Сводная таблица: код, название, базис, продано, проливы, заявки</h3>"
