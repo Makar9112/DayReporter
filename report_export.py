@@ -17,12 +17,12 @@ from analytics import (
     fig_corridor_deviations,
     fig_hourly_distribution,
     fig_instruments_limit,
-    fig_instruments_limit_with_basis_fill,
     fig_status_pie,
     fig_top_instruments,
     instruments_order_counts,
     status_breakdown,
 )
+from basis_fill_charts import fig_instruments_limit_with_basis_fill
 from contracts_lag import (
     aggregate_basis_fill_by_instrument,
     fig_lag_histogram,

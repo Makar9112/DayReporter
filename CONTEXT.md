@@ -25,6 +25,7 @@ DayReporter/
 ├── report_export.py    # полный HTML-отчёт (все разделы + Plotly через CDN)
 ├── strategy_advisor.py # рекомендации, индекс дисциплины, план сессии
 ├── rhythm_guide.py     # визуальные шпаргалки ритма кликов (отдельный модуль для Cloud)
+├── basis_fill_charts.py # график лимитов + залив базиса (Cloud-safe)
 ├── help_texts.py       # тексты подсказок (медиана и др.), без тяжёлых зависимостей
 ├── utils.py            # парсинг Excel/времени, базис F/J, фильтр сессии, load_excel_raw
 ├── requirements.txt
@@ -111,7 +112,7 @@ DayReporter/
 **Залив** — суммарный объём **всех заключённых сделок** по инструменту из отчёта по договорам (в интервале сессии).
 
 - **Лот = вагон**; перевод в тонны: **бензин 60 т**, **дизель 65 т** (`wagon_tons_per_lot` в `contracts_lag.py` — по подстрокам в коде/наименовании).
-- Функции: `aggregate_basis_fill_by_instrument`, `contracts_detail_for_instrument`; графики — `fig_instruments_limit_with_basis_fill` в `analytics.py` (варианты: две оси Y столбики/линия, группировка заявки+вагоны).
+- Функции: `aggregate_basis_fill_by_instrument`, `contracts_detail_for_instrument`; графики — `fig_instruments_limit_with_basis_fill` в **`basis_fill_charts.py`** (отдельный модуль для Cloud, как `rhythm_guide`).
 - Без загруженных договоров вторая серия **не показывается** (только классический график заявок).
 - UI: переключатель вида графика, таблица с колонками залива, expander со списком договоров по выбранному инструменту.
 
