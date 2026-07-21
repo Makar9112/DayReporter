@@ -67,7 +67,6 @@ from contracts_lag import (
 from help_texts import MEDIAN_HELP, MEDIAN_HELP_SHORT
 from instrument_stack_limits import load_stack_limits_file
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
-from report_export import build_full_html_report
 
 
 # --- Настройки страницы ---
@@ -1112,6 +1111,8 @@ def main() -> None:
     # --- Экспорт отчёта ---
     st.markdown("---")
     st.subheader("Отчёт")
+    from report_export import build_full_html_report
+
     report_html = build_full_html_report(
         summary=summary,
         df=df,

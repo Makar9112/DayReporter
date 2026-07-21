@@ -14,8 +14,6 @@ from plotly.subplots import make_subplots
 from trade_analytics import fig_instruments_limit, instruments_order_counts
 from utils import detect_basis, normalize_instrument_code, pick_first_nonempty
 
-from instrument_stack_limits import attach_stack_limits_to_display_table
-
 ScopeMode = Literal["my", "all"]
 RankBy = Literal["activity", "orders", "fill_tons", "prolivs"]
 ChartVariant = Literal[
@@ -204,6 +202,51 @@ def apply_top_n(
     ).reset_index(drop=True)
 
 
+def _reorder_display_columns(df: pd.DataFrame) -> pd.DataFrame:
+    order = [
+        "Код инструмента",
+        "Наименование инструмента",
+        "Базис",
+        "Max orders",
+        "Заявок отправлено",
+        "Δ заявок − max orders",
+        "Лот на заявку",
+        "Макс. лотов",
+        "Продано, т",
+        "Проливов",
+        "Договоров",
+        "Вагонов (лот)",
+        "Превышение лимита",
+    ]
+    cols = [c for c in order if c in df.columns]
+    rest = [c for c in df.columns if c not in cols]
+    return df[cols + rest]
+
+
+def _attach_stack_limits_to_display_table(
+    display: pd.DataFrame,
+    stack_limits: Optional[pd.DataFrame],
+) -> pd.DataFrame:
+    if display.empty:
+        return display
+    out = display.copy()
+    if stack_limits is None or stack_limits.empty:
+        out["Max orders"] = pd.NA
+        out["Лот на заявку"] = pd.NA
+        out["Макс. лотов"] = pd.NA
+        out["Δ заявок − max orders"] = pd.NA
+        return _reorder_display_columns(out)
+
+    lim = stack_limits.copy()
+    lim["Код инструмента"] = lim["Код инструмента"].map(normalize_instrument_code)
+    out["Код инструмента"] = out["Код инструмента"].map(normalize_instrument_code)
+    out = out.merge(lim, on="Код инструмента", how="left", suffixes=("", "_cfg"))
+    sent = pd.to_numeric(out["Заявок отправлено"], errors="coerce")
+    cap = pd.to_numeric(out["Max orders"], errors="coerce")
+    out["Δ заявок − max orders"] = sent - cap
+    return _reorder_display_columns(out)
+
+
 def _basis_by_instrument_from_orders(df: pd.DataFrame) -> dict[str, str]:
     out: dict[str, str] = {}
     if df.empty or "Код инструмента" not in df.columns:
@@ -256,7 +299,7 @@ def limits_instruments_display_table(
     ]
     if frame.empty:
         empty = pd.DataFrame(columns=empty_cols)
-        return attach_stack_limits_to_display_table(empty, stack_limits)
+        return _attach_stack_limits_to_display_table(empty, stack_limits)
 
     basis_map = _basis_by_instrument_from_orders(df)
     work = frame.copy()
@@ -305,7 +348,7 @@ def limits_instruments_display_table(
             "Превышение лимита": work["Превышение лимита"],
         }
     ).reset_index(drop=True)
-    return attach_stack_limits_to_display_table(base, stack_limits)
+    return _attach_stack_limits_to_display_table(base, stack_limits)
 
 
 def prepare_limits_chart_frame(
