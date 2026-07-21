@@ -229,11 +229,58 @@ def _finalize_limits_df(df: pd.DataFrame) -> pd.DataFrame:
     return df[_CANONICAL_COLS].reset_index(drop=True)
 
 
-def load_stack_limits_file(uploaded) -> pd.DataFrame:
-    """Читает .properties / .txt / .csv со строками Security code и Max orders."""
-    text = _read_text(uploaded)
+def _parse_terminal_paste_rows(text: str) -> pd.DataFrame:
+    """
+    Строки из буфера терминала без заголовка:
+    Security code, enabled, Order size, Max quantity, Max orders (таб или пробелы).
+    """
+    out_rows: List[dict] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = re.split(r"[\t\s]+", line.strip())
+        if len(parts) != 5:
+            continue
+        code = normalize_instrument_code(parts[0])
+        if not code or not re.fullmatch(r"[A-Za-z0-9]{4,}", code):
+            continue
+        enabled = _to_int(parts[1])
+        if enabled == 0:
+            continue
+        out_rows.append(
+            {
+                "Код инструмента": code,
+                "Лот на заявку": _to_int(parts[2]),
+                "Макс. лотов": _to_int(parts[3]),
+                "Max orders": _to_int(parts[4]),
+            }
+        )
+
+    if not out_rows:
+        return _empty_limits()
+    return _finalize_limits_df(pd.DataFrame(out_rows))
+
+
+def _first_line_looks_like_header(line: str) -> bool:
+    low = line.strip().lower()
+    if "security" in low and "code" in low:
+        return True
+    if "max" in low and "order" in low:
+        return True
+    if low.startswith("enabled"):
+        return True
+    return False
+
+
+def load_stack_limits_text(text: str) -> pd.DataFrame:
+    """Разбор текста лимитов: вставка из буфера, .properties или таблица с заголовком."""
     if not text.strip():
-        raise ValueError("Файл лимитов пустой.")
+        raise ValueError("Текст лимитов пустой.")
+
+    paste = _parse_terminal_paste_rows(text)
+    if not paste.empty:
+        return paste
 
     if "security" in text.lower() and "code" in text.lower().split("\n")[0:3]:
         table = _parse_delimited_table(text)
@@ -244,11 +291,22 @@ def load_stack_limits_file(uploaded) -> pd.DataFrame:
     if not props.empty:
         return props
 
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) >= 2 and _first_line_looks_like_header(lines[0]):
+        table = _parse_delimited_table(text)
+        if not table.empty:
+            return table
+
     table = _parse_delimited_table(text)
     if not table.empty:
         return table
 
     raise ValueError(
-        "Не удалось разобрать файл. Нужны колонки Security code и Max orders "
-        "(таблица через табуляцию/запятую) или свойства code / maxOrders."
+        "Не удалось разобрать лимиты. Вставьте строки «код + 4 числа» через табуляцию, "
+        "или таблицу с Security code / Max orders, или .properties."
     )
+
+
+def load_stack_limits_file(uploaded) -> pd.DataFrame:
+    """Читает .properties / .txt / .csv со строками Security code и Max orders."""
+    return load_stack_limits_text(_read_text(uploaded))

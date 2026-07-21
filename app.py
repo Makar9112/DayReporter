@@ -65,7 +65,7 @@ from contracts_lag import (
     match_orders_to_contracts,
 )
 from help_texts import MEDIAN_HELP, MEDIAN_HELP_SHORT
-from instrument_stack_limits import load_stack_limits_file
+from instrument_stack_limits import load_stack_limits_file, load_stack_limits_text
 from utils import filter_by_session_time, load_excel, time_of_day_to_seconds
 
 
@@ -148,11 +148,24 @@ def render_sidebar():
         "Лимиты по кодам (.properties, .txt, .csv)",
         type=["properties", "txt", "csv", "tsv"],
         help=(
-            "Таблица с колонками Security code, Max orders, Order size, Max quantity. "
-            "Для сравнения с числом заявок в журнале (Δ в таблице лимитов)."
+            "Файл с колонками Security code, Max orders и др. "
+            "Или вставьте строки из буфера ниже (код и четыре числа через таб)."
         ),
         key=f"stack_limits_uploader_{st.session_state.get('stack_limits_uploader_reset', 0)}",
     )
+
+    with st.sidebar.expander("Вставить лимиты из буфера", expanded=False):
+        st.caption(
+            "Без заголовка: код инструмента, enabled, лот на заявку, "
+            "макс. лотов, max orders — как при копировании из таблицы настроек."
+        )
+        stack_limits_paste = st.text_area(
+            "Строки лимитов",
+            height=120,
+            key=f"stack_limits_paste_input_{st.session_state.get('stack_limits_paste_reset', 0)}",
+            label_visibility="collapsed",
+            placeholder="A692DZM060F\t2\t1\t1\t10",
+        )
 
     if st.session_state.get("df_all") is not None:
         name = st.session_state.get("upload_name", "файл")
@@ -177,6 +190,7 @@ def render_sidebar():
                 "df_stack_limits",
                 "stack_limits_upload_name",
                 "stack_limits_upload_key",
+                "stack_limits_paste_key",
             ):
                 st.session_state.pop(key, None)
             st.session_state["uploader_reset"] = st.session_state.get("uploader_reset", 0) + 1
@@ -185,6 +199,9 @@ def render_sidebar():
             )
             st.session_state["stack_limits_uploader_reset"] = (
                 st.session_state.get("stack_limits_uploader_reset", 0) + 1
+            )
+            st.session_state["stack_limits_paste_reset"] = (
+                st.session_state.get("stack_limits_paste_reset", 0) + 1
             )
             st.rerun()
 
@@ -261,6 +278,7 @@ def render_sidebar():
         uploaded,
         uploaded_contracts,
         uploaded_stack_limits,
+        stack_limits_paste,
         use_basket,
         int(instrument_limit),
         int(day_limit_c6),
@@ -329,7 +347,7 @@ def ensure_contracts_loaded(uploaded_contracts) -> bool:
     return st.session_state.get("df_contracts") is not None
 
 
-def ensure_stack_limits_loaded(uploaded_stack_limits) -> bool:
+def ensure_stack_limits_loaded(uploaded_stack_limits, paste_text: str = "") -> bool:
     """Справочник Max orders / лот на заявку по коду инструмента."""
     if uploaded_stack_limits is not None:
         file_key = (uploaded_stack_limits.name, uploaded_stack_limits.size)
@@ -350,7 +368,43 @@ def ensure_stack_limits_loaded(uploaded_stack_limits) -> bool:
 
             st.session_state["stack_limits_upload_key"] = file_key
             st.session_state["stack_limits_upload_name"] = uploaded_stack_limits.name
+            st.session_state["stack_limits_paste_key"] = None
             st.session_state["df_stack_limits"] = df_l
+
+        return st.session_state.get("df_stack_limits") is not None
+
+    paste = (paste_text or "").strip()
+    if not paste:
+        if st.session_state.get("stack_limits_paste_key") is not None:
+            for key in (
+                "df_stack_limits",
+                "stack_limits_upload_name",
+                "stack_limits_paste_key",
+                "stack_limits_upload_key",
+            ):
+                st.session_state.pop(key, None)
+        return st.session_state.get("df_stack_limits") is not None
+
+    paste_key = hash(paste)
+    if st.session_state.get("stack_limits_paste_key") != paste_key:
+        try:
+            with st.spinner("Разбор вставленных лимитов…"):
+                df_l = load_stack_limits_text(paste)
+        except ValueError as exc:
+            st.error(f"Ошибка разбора лимитов: {exc}")
+            return False
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Непредвиденная ошибка при разборе лимитов: {exc}")
+            return False
+
+        if df_l.empty:
+            st.warning("Во вставке нет распознанных строк.")
+            return False
+
+        st.session_state["stack_limits_paste_key"] = paste_key
+        st.session_state["stack_limits_upload_key"] = None
+        st.session_state["stack_limits_upload_name"] = "вставка из буфера"
+        st.session_state["df_stack_limits"] = df_l
 
     return st.session_state.get("df_stack_limits") is not None
 
@@ -956,6 +1010,7 @@ def main() -> None:
         uploaded,
         uploaded_contracts,
         uploaded_stack_limits,
+        stack_limits_paste,
         use_basket,
         instrument_limit,
         day_limit_c6,
@@ -966,7 +1021,7 @@ def main() -> None:
     ) = render_sidebar()
 
     ensure_contracts_loaded(uploaded_contracts)
-    ensure_stack_limits_loaded(uploaded_stack_limits)
+    ensure_stack_limits_loaded(uploaded_stack_limits, stack_limits_paste)
 
     if not ensure_dataframe_loaded(uploaded):
         st.info(
