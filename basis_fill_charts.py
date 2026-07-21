@@ -220,22 +220,33 @@ def _add_proliv_dash_markers(
     row: int,
     col: int,
 ) -> None:
-    """Пунктир от нуля до числа проливов над каждым кодом на панели заявок."""
+    """
+    Пунктир проливов на правой шкале Y (не делит ось с лимитом 250).
+    Подпись — по середине вертикального пунктира.
+    """
     seg_x: list = []
     seg_y: list = []
     label_x: list = []
     label_y: list = []
     label_text: list = []
+    hover_x: list = []
+    hover_y: list = []
+    hover_text: list = []
+    max_p = 0
 
     for code, raw in zip(codes, prolivs):
         p = int(pd.to_numeric(raw, errors="coerce") or 0)
         if p <= 0:
             continue
+        max_p = max(max_p, p)
         seg_x.extend([code, code, None])
         seg_y.extend([0, p, None])
         label_x.append(code)
-        label_y.append(p)
+        label_y.append(p / 2.0)
         label_text.append(str(p))
+        hover_x.append(code)
+        hover_y.append(p / 2.0)
+        hover_text.append(f"Проливов: {p}")
 
     if not seg_x:
         return
@@ -245,27 +256,42 @@ def _add_proliv_dash_markers(
             x=seg_x,
             y=seg_y,
             mode="lines",
-            line=dict(color="#7D3C98", width=2, dash="dash"),
+            line=dict(color="#7D3C98", width=2.5, dash="dash"),
             name="Проливов, шт",
-            hovertemplate="%{x}<br>Проливов: %{y}<extra></extra>",
+            hoverinfo="skip",
             showlegend=True,
         ),
         row=row,
         col=col,
+        secondary_y=True,
     )
     fig.add_trace(
         go.Scatter(
-            x=label_x,
-            y=label_y,
-            mode="text",
+            x=hover_x,
+            y=hover_y,
+            mode="markers+text",
             text=label_text,
-            textposition="top center",
-            textfont=dict(size=11, color="#7D3C98"),
-            hoverinfo="skip",
+            textposition="middle center",
+            textfont=dict(size=12, color="#FFFFFF"),
+            marker=dict(size=22, color="#7D3C98", symbol="circle"),
+            hovertext=hover_text,
+            hoverinfo="text",
             showlegend=False,
         ),
         row=row,
         col=col,
+        secondary_y=True,
+    )
+
+    fig.update_yaxes(
+        title_text="Проливов",
+        row=row,
+        col=col,
+        secondary_y=True,
+        range=[0, max(max_p * 1.35, 3.0)],
+        showgrid=False,
+        tickfont=dict(color="#7D3C98"),
+        title_font=dict(color="#7D3C98", size=11),
     )
 
 
@@ -349,9 +375,10 @@ def _fig_split_panels(
         shared_xaxes=True,
         vertical_spacing=0.12,
         subplot_titles=(
-            "Ваши заявки, шт (фиолетовый пунктир — число проливов)",
+            "Ваши заявки, шт · фиолетовый пунктир — проливы (шкала справа)",
             "Залив базиса, т",
         ),
+        specs=[[{"secondary_y": True}], [{}]],
     )
     fig.add_trace(
         go.Bar(
@@ -367,6 +394,7 @@ def _fig_split_panels(
         ),
         row=1,
         col=1,
+        secondary_y=False,
     )
     _add_proliv_dash_markers(fig, codes, merged["Проливов"], row=1, col=1)
     fig.add_hline(
@@ -376,6 +404,7 @@ def _fig_split_panels(
         annotation_text=f"Лимит {limit}",
         row=1,
         col=1,
+        secondary_y=False,
     )
     fig.add_trace(
         go.Bar(
@@ -409,11 +438,11 @@ def _fig_split_panels(
         height=_chart_height(n, per_row=22, base=200),
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(t=90, b=60, l=50, r=30),
+        margin=dict(t=90, b=60, l=50, r=55),
     )
+    fig.update_yaxes(title_text="Заявки", row=1, col=1, secondary_y=False)
     fig.update_xaxes(tickangle=-45, row=2, col=1)
     fig.update_xaxes(title_text="Код инструмента", row=2, col=1)
-    fig.update_yaxes(title_text="Заявки", row=1, col=1)
     fig.update_yaxes(title_text="Тонн", row=2, col=1)
     return fig
 
