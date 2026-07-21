@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from analytics import fig_instruments_limit, instruments_order_counts
+from trade_analytics import fig_instruments_limit, instruments_order_counts
 
 ScopeMode = Literal["my", "all"]
 RankBy = Literal["activity", "orders", "fill_tons"]
@@ -39,23 +39,52 @@ def _empty_fig(message: str) -> go.Figure:
 
 
 def _attach_fill_names(merged: pd.DataFrame, fill_by_inst: pd.DataFrame) -> pd.DataFrame:
+    """Наименование из журнала; из договора — только если в журнале пусто."""
     if "Наименование" not in merged.columns:
         merged["Наименование"] = ""
-    name_fill = fill_by_inst[["Код инструмента", "Наименование"]].copy()
+    if "Наименование_договора" not in fill_by_inst.columns:
+        return merged
+
+    name_fill = fill_by_inst[["Код инструмента", "Наименование_договора"]].copy()
     name_fill["Код инструмента"] = name_fill["Код инструмента"].astype(str)
     merged = merged.merge(
-        name_fill.rename(columns={"Наименование": "_name_fill"}),
+        name_fill.rename(columns={"Наименование_договора": "_name_contract"}),
         on="Код инструмента",
         how="left",
     )
-    merged["Наименование"] = merged.apply(
-        lambda r: r["Наименование"]
-        if pd.notna(r.get("Наименование")) and str(r["Наименование"]).strip()
-        else (r.get("_name_fill") or ""),
-        axis=1,
-    )
-    merged.drop(columns=["_name_fill"], errors="ignore", inplace=True)
+
+    def _resolve(row) -> str:
+        journal = str(row.get("Наименование") or "").strip()
+        if journal and journal.lower() != "nan":
+            return journal
+        contract = str(row.get("_name_contract") or "").strip()
+        if contract and contract.lower() != "nan":
+            return contract
+        return ""
+
+    merged["Наименование"] = merged.apply(_resolve, axis=1)
+    merged.drop(columns=["_name_contract"], errors="ignore", inplace=True)
     return merged
+
+
+def _enrich_labels(merged: pd.DataFrame) -> pd.DataFrame:
+    merged = merged.copy()
+    merged["Наименование"] = merged["Наименование"].fillna("").astype(str).str.strip()
+    return merged
+
+
+def _y_labels_with_names(df: pd.DataFrame) -> pd.Series:
+    """Подпись оси: код и укороченное наименование из журнала."""
+    out = []
+    for _, row in df.iterrows():
+        code = str(row["Код инструмента"])
+        name = str(row.get("Наименование") or "").strip()
+        if not name:
+            out.append(code)
+            continue
+        short = name if len(name) <= 42 else name[:41] + "…"
+        out.append(f"{code} · {short}")
+    return pd.Series(out, index=df.index)
 
 
 def merge_orders_and_basis_fill(
@@ -98,6 +127,7 @@ def merge_orders_and_basis_fill(
     if counts.empty:
         merged = fill.copy()
         merged["Количество"] = 0
+        merged["Наименование"] = ""
         merged = _attach_fill_names(merged, fill_by_inst)
     else:
         counts = counts.copy()
@@ -162,7 +192,8 @@ def prepare_limits_chart_frame(
     rank_by: RankBy = "activity",
 ) -> pd.DataFrame:
     merged = merge_orders_and_basis_fill(df, fill_by_inst, scope=scope)
-    return apply_top_n(merged, top_n, rank_by=rank_by)
+    merged = apply_top_n(merged, top_n, rank_by=rank_by)
+    return _enrich_labels(merged)
 
 
 def _chart_height(n: int, *, per_row: int = 28, base: int = 120) -> int:
@@ -256,7 +287,8 @@ def _fig_split_panels(
             text=merged["Количество"],
             textposition="outside",
             name="Заявки",
-            hovertemplate="%{x}<br>Заявок: %{y}<extra></extra>",
+            customdata=merged["Наименование"].replace("", "—"),
+            hovertemplate="%{x}<br>%{customdata}<br>Заявок: %{y}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -278,11 +310,17 @@ def _fig_split_panels(
             textposition="outside",
             name="Залив, т",
             hovertemplate=(
-                "%{x}<br>Тонн: %{y:.0f}<br>"
+                "%{x}<br>%{customdata[2]}<br>Тонн: %{y:.0f}<br>"
                 "Вагонов: %{customdata[0]:.0f}<br>Договоров: %{customdata[1]}"
                 "<extra></extra>"
             ),
-            customdata=list(zip(merged["Лоты"], merged["Договоров"])),
+            customdata=list(
+                zip(
+                    merged["Лоты"],
+                    merged["Договоров"],
+                    merged["Наименование"].replace("", "—"),
+                )
+            ),
         ),
         row=2,
         col=1,
@@ -308,24 +346,26 @@ def _fig_horizontal_dual(
     m["Код инструмента"] = m["Код инструмента"].astype(str)
     m = m.set_index("Код инструмента").loc[codes_list].reset_index()
     colors = m["Количество"].gt(limit).map({True: "#C0392B", False: "#27AE60"})
+    y_labels = _y_labels_with_names(m)
 
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             orientation="h",
-            y=m["Код инструмента"],
+            y=y_labels,
             x=m["Количество"],
             name="Ваши заявки, шт",
             marker_color=colors,
             text=m["Количество"],
             textposition="outside",
-            hovertemplate="%{y}<br>Заявок: %{x}<extra></extra>",
+            customdata=m["Наименование"].replace("", "—"),
+            hovertemplate="%{customdata}<br>Заявок: %{x}<extra></extra>",
         )
     )
     fig.add_trace(
         go.Bar(
             orientation="h",
-            y=m["Код инструмента"],
+            y=y_labels,
             x=m["Тонны залива"],
             name="Залив базиса, т",
             marker_color="rgba(52, 152, 219, 0.55)",
@@ -333,11 +373,17 @@ def _fig_horizontal_dual(
             text=m["Тонны залива"].map(lambda v: f"{v:.0f}" if v else ""),
             textposition="outside",
             hovertemplate=(
-                "%{y}<br>Тонн: %{x:.0f}<br>"
+                "%{customdata[2]}<br>Тонн: %{x:.0f}<br>"
                 "Вагонов: %{customdata[0]:.0f}<br>Договоров: %{customdata[1]}"
                 "<extra></extra>"
             ),
-            customdata=list(zip(m["Лоты"], m["Договоров"])),
+            customdata=list(
+                zip(
+                    m["Лоты"],
+                    m["Договоров"],
+                    m["Наименование"].replace("", "—"),
+                )
+            ),
         )
     )
     fig.add_vline(

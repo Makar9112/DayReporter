@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from analytics import instruments_order_counts
+from trade_analytics import instruments_order_counts
 from criteria import (
     STATUS_OK,
     STATUS_VIOLATED,

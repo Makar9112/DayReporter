@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import plotly.io as pio
 
-from analytics import (
+from trade_analytics import (
     basis_distribution,
     fig_basis_pie,
     fig_corridor_deviations,

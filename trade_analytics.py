@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from utils import format_timedelta
+from utils import format_timedelta, pick_first_nonempty
 
 
 def _empty_fig(message: str) -> go.Figure:
@@ -150,7 +150,7 @@ def fig_top_instruments(df: pd.DataFrame, top_n: int = 10) -> go.Figure:
     if "Наименование инструмента" in df.columns:
         names = (
             df.groupby("Код инструмента")["Наименование инструмента"]
-            .agg(lambda s: s.dropna().iloc[0] if len(s.dropna()) else "")
+            .agg(pick_first_nonempty)
         )
         counts["Наименование"] = counts["Код инструмента"].map(names)
         counts["Подпись"] = counts["Код инструмента"] + "<br>" + counts["Наименование"].fillna("").str[:40]
@@ -326,7 +326,7 @@ def instruments_order_counts(df: pd.DataFrame) -> pd.DataFrame:
             df.groupby("Код инструмента")
             .agg(
                 Количество=("Код инструмента", "size"),
-                Наименование=("Наименование инструмента", "first"),
+                Наименование=("Наименование инструмента", pick_first_nonempty),
             )
             .reset_index()
             .sort_values("Количество", ascending=False)

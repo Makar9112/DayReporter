@@ -17,6 +17,7 @@ from utils import (
     load_excel_raw,
     normalize_columns,
     parse_times_column,
+    pick_first_nonempty,
     timedelta_to_seconds,
 )
 
@@ -222,7 +223,7 @@ def fig_lag_histogram(matched: pd.DataFrame):
 
     col = "Задержка реакции, мс"
     if matched.empty or col not in matched.columns:
-        from analytics import _empty_fig
+        from trade_analytics import _empty_fig
 
         return _empty_fig("Нет сопоставленных пар заявка–договор")
 
@@ -269,7 +270,7 @@ def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFra
     """
     empty_cols = [
         "Код инструмента",
-        "Наименование",
+        "Наименование_договора",
         "Договоров",
         "Лоты",
         "Тонны залива",
@@ -292,7 +293,7 @@ def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFra
     for code, group in work.groupby("Код инструмента", sort=False):
         code_s = str(code)
         if name_col:
-            name = str(group[name_col].dropna().iloc[0]) if group[name_col].notna().any() else ""
+            name = pick_first_nonempty(group[name_col])
         else:
             name = ""
         lots = (
@@ -304,7 +305,7 @@ def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFra
         rows.append(
             {
                 "Код инструмента": code_s,
-                "Наименование": name,
+                "Наименование_договора": name,
                 "Договоров": int(len(group)),
                 "Лоты": lots,
                 "Тонны залива": lots * t_per,

@@ -197,6 +197,17 @@ def timedelta_to_seconds(td) -> Optional[float]:
     return None
 
 
+def pick_first_nonempty(series: pd.Series) -> str:
+    """Первое непустое значение в группе (наименование инструмента из журнала)."""
+    for raw in series:
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            continue
+        text = str(raw).strip()
+        if text and text.lower() != "nan":
+            return text
+    return ""
+
+
 def format_timedelta(td) -> str:
     """Форматирует timedelta как ЧЧ:ММ:СС.ммм."""
     if td is None or (isinstance(td, float) and pd.isna(td)):

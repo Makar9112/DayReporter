@@ -13,7 +13,7 @@
 ```
 DayReporter/
 ├── app.py                 # точка входа Streamlit
-├── analytics.py           # статистика и графики
+├── trade_analytics.py     # статистика и графики
 ├── criteria.py            # проверка критериев №1–№6
 ├── utils.py               # парсинг времени, базис, загрузка Excel
 ├── requirements.txt       # зависимости

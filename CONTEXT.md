@@ -19,7 +19,7 @@ Streamlit-приложение для анализа журнала заявок
 ```
 DayReporter/
 ├── app.py              # UI Streamlit, вкладки, session_state, скачивание отчёта
-├── analytics.py        # сводка, графики Plotly
+├── trade_analytics.py  # сводка, графики Plotly (не analytics — конфликт на Cloud)
 ├── criteria.py         # критерии №1–№6, burst-диагностика, build_html_report (устаревший простой HTML)
 ├── contracts_lag.py    # договоры, задержка, агрегация залива базиса (тонны/вагоны)
 ├── report_export.py    # полный HTML-отчёт (все разделы + Plotly через CDN)
@@ -112,7 +112,7 @@ DayReporter/
 **Залив** — суммарный объём **всех заключённых сделок** по инструменту из отчёта по договорам (в интервале сессии).
 
 - **Лот = вагон**; перевод в тонны: **бензин 60 т**, **дизель 65 т** (`wagon_tons_per_lot` в `contracts_lag.py` — по подстрокам в коде/наименовании).
-- Функции: `aggregate_basis_fill_by_instrument`, `contracts_detail_for_instrument`; графики — `fig_instruments_limit_with_basis_fill` в **`basis_fill_charts.py`** (отдельный модуль для Cloud, как `rhythm_guide`).
+- Функции: `aggregate_basis_fill_by_instrument`, `contracts_detail_for_instrument`; графики — `fig_instruments_limit_with_basis_fill` в **`basis_fill_charts.py`**. Наименование: **журнал** (`Наименование инструмента`, `pick_first_nonempty`), договор — fallback (`Наименование_договора`).
 - Без загруженных договоров вторая серия **не показывается** (только классический график заявок).
 - UI: по умолчанию **только ваши коды**, топ **20**, вид **две панели**; опция «все из договоров», топ 10–30, горизонтальный и др. графики; таблица — свои коды (опция весь рынок).
 

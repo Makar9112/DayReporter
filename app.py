@@ -11,7 +11,7 @@ from datetime import datetime, time
 
 import streamlit as st
 
-from analytics import (
+from trade_analytics import (
     basis_distribution,
     check_instrument_limits,
     compute_summary,
