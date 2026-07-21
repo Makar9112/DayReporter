@@ -248,3 +248,119 @@ def fig_lag_histogram(matched: pd.DataFrame):
     fig.update_traces(marker=dict(size=9, color="#c0392b"))
     fig.update_layout(margin=dict(t=50, b=40, l=40, r=20))
     return fig
+
+
+def wagon_tons_per_lot(code: str, name: str = "") -> float:
+    """
+    Тонн в одном лоте (вагоне): бензин — 60, дизель — 65.
+    По коду и наименованию инструмента; иначе 60.
+    """
+    blob = f"{code} {name}".lower().replace("ё", "е")
+    diesel_keys = ("диз", "дт", "diesel", "дизел")
+    if any(k in blob for k in diesel_keys):
+        return 65.0
+    return 60.0
+
+
+def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFrame:
+    """
+    Суммарный залив по инструменту: все договоры в переданном фрейме
+    (уже отфильтрованном по сессии при необходимости).
+    """
+    empty_cols = [
+        "Код инструмента",
+        "Наименование",
+        "Договоров",
+        "Лоты",
+        "Тонны залива",
+    ]
+    if df_contracts is None or df_contracts.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    work = df_contracts.dropna(subset=["Код инструмента"]).copy()
+    if work.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    name_col = (
+        "Наименование и Базис поставки"
+        if "Наименование и Базис поставки" in work.columns
+        else None
+    )
+    has_lots = "Объем, лотов" in work.columns
+
+    rows: List[dict] = []
+    for code, group in work.groupby("Код инструмента", sort=False):
+        code_s = str(code)
+        if name_col:
+            name = str(group[name_col].dropna().iloc[0]) if group[name_col].notna().any() else ""
+        else:
+            name = ""
+        lots = (
+            float(group["Объем, лотов"].fillna(0).sum())
+            if has_lots
+            else 0.0
+        )
+        t_per = wagon_tons_per_lot(code_s, name)
+        rows.append(
+            {
+                "Код инструмента": code_s,
+                "Наименование": name,
+                "Договоров": int(len(group)),
+                "Лоты": lots,
+                "Тонны залива": lots * t_per,
+            }
+        )
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return pd.DataFrame(columns=empty_cols)
+    return result.sort_values("Тонны залива", ascending=False).reset_index(drop=True)
+
+
+def contracts_detail_for_instrument(
+    df_contracts: pd.DataFrame,
+    instrument_code: str,
+) -> pd.DataFrame:
+    """Договоры по одному инструменту для детализации залива."""
+    cols_out = [
+        "Номер договора",
+        "Время договора",
+        "Объем, лотов",
+        "Тонн",
+        "Цена",
+    ]
+    if df_contracts is None or df_contracts.empty:
+        return pd.DataFrame(columns=cols_out)
+
+    work = df_contracts[
+        df_contracts["Код инструмента"].astype(str) == str(instrument_code)
+    ].copy()
+    if work.empty:
+        return pd.DataFrame(columns=cols_out)
+
+    name = ""
+    if "Наименование и Базис поставки" in work.columns:
+        s = work["Наименование и Базис поставки"].dropna()
+        if len(s):
+            name = str(s.iloc[0])
+    t_per = wagon_tons_per_lot(str(instrument_code), name)
+
+    if "Время_сек" in work.columns:
+        work = work.sort_values("Время_сек", na_position="last")
+    if "Время_td" in work.columns:
+        work["Время договора"] = work["Время_td"].map(format_timedelta)
+    elif "Время договора" not in work.columns:
+        work["Время договора"] = ""
+
+    lots = work["Объем, лотов"] if "Объем, лотов" in work.columns else 0
+    work["Тонн"] = pd.to_numeric(lots, errors="coerce").fillna(0) * t_per
+
+    out = work.copy()
+    if "Номер договора" not in out.columns:
+        out["Номер договора"] = ""
+    if "Цена" not in out.columns:
+        out["Цена"] = None
+    if "Объем, лотов" not in out.columns:
+        out["Объем, лотов"] = 0
+
+    return out[cols_out].reset_index(drop=True)

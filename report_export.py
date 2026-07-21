@@ -17,12 +17,18 @@ from analytics import (
     fig_corridor_deviations,
     fig_hourly_distribution,
     fig_instruments_limit,
+    fig_instruments_limit_with_basis_fill,
     fig_status_pie,
     fig_top_instruments,
     instruments_order_counts,
     status_breakdown,
 )
-from contracts_lag import fig_lag_histogram, lag_summary, match_orders_to_contracts
+from contracts_lag import (
+    aggregate_basis_fill_by_instrument,
+    fig_lag_histogram,
+    lag_summary,
+    match_orders_to_contracts,
+)
 from criteria import (
     STATUS_BASKET,
     STATUS_INFO,
@@ -117,6 +123,7 @@ def build_full_html_report(
     contracts_name: str = "",
     session_interval: str = "",
     df_contracts: Optional[pd.DataFrame] = None,
+    df_contracts_session: Optional[pd.DataFrame] = None,
     max_lag_sec: float = 120.0,
 ) -> str:
     """Полный отчёт: статистика, графики, критерии, лимиты, рекомендации, задержка."""
@@ -148,13 +155,24 @@ def build_full_html_report(
 
     # --- Графики ---
     charts_html = ""
+    fill_for_limits = None
+    if df_contracts_session is not None and not df_contracts_session.empty:
+        fill_for_limits = aggregate_basis_fill_by_instrument(df_contracts_session)
+    limits_fig = fig_instruments_limit(df, limit=instrument_limit)
+    if fill_for_limits is not None and not fill_for_limits.empty:
+        limits_fig = fig_instruments_limit_with_basis_fill(
+            df,
+            fill_for_limits,
+            limit=instrument_limit,
+            variant="dual_bars",
+        )
     chart_specs = [
         ("chart-status", fig_status_pie(df), "Статусы заявок"),
         ("chart-basis", fig_basis_pie(df), "Базисы поставки"),
         ("chart-top", fig_top_instruments(df, top_n=10), "Топ инструментов"),
         ("chart-hour", fig_hourly_distribution(df), "Распределение по времени"),
         ("chart-corridor", fig_corridor_deviations(df), "Коридор цен"),
-        ("chart-limits", fig_instruments_limit(df, limit=instrument_limit), "Лимиты по инструментам"),
+        ("chart-limits", limits_fig, "Лимиты по инструментам"),
     ]
     for div_id, fig, caption in chart_specs:
         div = _plot_div(fig, div_id)

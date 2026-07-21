@@ -19,6 +19,7 @@ from analytics import (
     fig_corridor_deviations,
     fig_hourly_distribution,
     fig_instruments_limit,
+    fig_instruments_limit_with_basis_fill,
     fig_status_pie,
     fig_top_instruments,
     instruments_order_counts,
@@ -51,6 +52,8 @@ from strategy_advisor import (
     tips_to_dataframe,
 )
 from contracts_lag import (
+    aggregate_basis_fill_by_instrument,
+    contracts_detail_for_instrument,
     fig_lag_histogram,
     lag_summary,
     load_contracts_excel,
@@ -674,13 +677,26 @@ def render_tab_recommendations(
         )
 
 
-def render_tab_limits(df, instrument_limit: int):
+def render_tab_limits(
+    df,
+    instrument_limit: int,
+    df_contracts_session=None,
+):
     """Вкладка «Лимиты по инструментам»."""
     st.subheader("Лимит заявок на один инструмент (стакан)")
     st.write(
         f"Проверка: количество заявок по каждому коду инструмента за день "
         f"не должно превышать **{instrument_limit}**."
     )
+
+    fill_summary = None
+    if df_contracts_session is not None and not df_contracts_session.empty:
+        fill_summary = aggregate_basis_fill_by_instrument(df_contracts_session)
+        st.caption(
+            "По файлу договоров в том же интервале, что и заявки: "
+            "**залив базиса** — суммарный объём заключённых сделок "
+            "(лот = вагон; бензин 60 т, дизель 65 т на вагон)."
+        )
 
     counts = instruments_order_counts(df)
     violations = check_instrument_limits(df, limit=instrument_limit)
@@ -697,14 +713,76 @@ def render_tab_limits(df, instrument_limit: int):
     else:
         st.success(f"Ни один инструмент не превысил лимит {instrument_limit} заявок.")
 
-    st.plotly_chart(fig_instruments_limit(df, limit=instrument_limit), use_container_width=True)
+    if fill_summary is not None and not fill_summary.empty:
+        chart_variant = st.radio(
+            "Вид графика (заявки + залив базиса)",
+            options=[
+                ("dual_bars", "Две оси Y: заявки (столбики) + тонны залива (столбики)"),
+                ("bars_line", "Две оси Y: заявки (столбики) + тонны залива (линия)"),
+                ("grouped", "Одна ось: заявки (шт) и вагоны (лот) рядом"),
+            ],
+            format_func=lambda x: x[1],
+            horizontal=False,
+            key="limits_chart_variant",
+        )
+        variant_key = chart_variant[0]
+        st.plotly_chart(
+            fig_instruments_limit_with_basis_fill(
+                df,
+                fill_summary,
+                limit=instrument_limit,
+                variant=variant_key,
+            ),
+            use_container_width=True,
+        )
+    else:
+        st.plotly_chart(fig_instruments_limit(df, limit=instrument_limit), use_container_width=True)
 
     with st.expander("Полная таблица по инструментам"):
         table = counts.copy()
         table["Превышение"] = table["Количество"].map(
             lambda n: "Да" if n > instrument_limit else "Нет"
         )
+        if fill_summary is not None and not fill_summary.empty:
+            fs = fill_summary.rename(
+                columns={
+                    "Договоров": "Договоров (залив)",
+                    "Лоты": "Вагонов (лот)",
+                    "Тонны залива": "Залив, т",
+                }
+            )
+            table = table.merge(
+                fs[
+                    [
+                        "Код инструмента",
+                        "Договоров (залив)",
+                        "Вагонов (лот)",
+                        "Залив, т",
+                    ]
+                ],
+                on="Код инструмента",
+                how="outer",
+            )
+            table["Количество"] = table["Количество"].fillna(0).astype(int)
+            table["Превышение"] = table["Количество"].map(
+                lambda n: "Да" if n > instrument_limit else "Нет"
+            )
         st.dataframe(table, use_container_width=True, hide_index=True)
+
+    if (
+        df_contracts_session is not None
+        and not df_contracts_session.empty
+        and fill_summary is not None
+        and not fill_summary.empty
+    ):
+        with st.expander("Договоры по инструменту (детализация залива)"):
+            codes = fill_summary["Код инструмента"].astype(str).tolist()
+            pick = st.selectbox("Код инструмента", options=codes, key="fill_detail_code")
+            detail = contracts_detail_for_instrument(df_contracts_session, pick)
+            if detail.empty:
+                st.info("Нет договоров по выбранному инструменту в интервале.")
+            else:
+                st.dataframe(detail, use_container_width=True, hide_index=True)
 
     return violations
 
@@ -813,6 +891,16 @@ def main() -> None:
     else:
         session_interval = "без фильтра времени"
 
+    df_contracts_session = None
+    raw_contracts = st.session_state.get("df_contracts")
+    if raw_contracts is not None and not raw_contracts.empty:
+        if filter_enabled:
+            df_contracts_session = filter_by_session_time(
+                raw_contracts, start_sec, end_sec
+            )
+        else:
+            df_contracts_session = raw_contracts
+
     tab_stats, tab_charts, tab_crit, tab_limits, tab_advice, tab_lag = st.tabs(
         [
             "Общая статистика",
@@ -834,7 +922,11 @@ def main() -> None:
         results = render_tab_criteria(df, use_basket=use_basket, day_limit_c6=day_limit_c6)
 
     with tab_limits:
-        limit_violations = render_tab_limits(df, instrument_limit=instrument_limit)
+        limit_violations = render_tab_limits(
+            df,
+            instrument_limit=instrument_limit,
+            df_contracts_session=df_contracts_session,
+        )
 
     with tab_advice:
         render_tab_recommendations(
@@ -872,6 +964,7 @@ def main() -> None:
         contracts_name=st.session_state.get("contracts_upload_name", ""),
         session_interval=session_interval,
         df_contracts=st.session_state.get("df_contracts"),
+        df_contracts_session=df_contracts_session,
         max_lag_sec=max_lag_sec,
     )
     report_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
