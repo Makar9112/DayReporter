@@ -24,7 +24,7 @@ from trade_analytics import (
 )
 from basis_fill_charts import (
     fig_instruments_limit_with_basis_fill,
-    merge_orders_and_basis_fill,
+    limits_instruments_display_table,
 )
 from contracts_lag import (
     DEFAULT_PROLIV_SPREAD_MS,
@@ -138,48 +138,6 @@ def _fill_aggregate_table(df: pd.DataFrame) -> pd.DataFrame:
         "Тонны залива": "Залив, т",
     }
     return df[cols].rename(columns=rename)
-
-
-def _merged_limits_table(
-    df: pd.DataFrame,
-    fill_by_inst: pd.DataFrame,
-    instrument_limit: int,
-    inst_counts: pd.DataFrame,
-) -> pd.DataFrame:
-    merged = merge_orders_and_basis_fill(df, fill_by_inst, scope="my")
-    if merged.empty:
-        merged = merge_orders_and_basis_fill(df, fill_by_inst, scope="all")
-    if merged.empty:
-        merged = _fill_aggregate_table(fill_by_inst).copy()
-        merged["Количество"] = 0
-        merged["Наименование"] = merged.get("Наименование", "")
-        if "Превышение" not in merged.columns:
-            merged["Превышение"] = "Нет"
-        return merged
-    merged = merged.copy()
-    merged["Превышение"] = merged["Количество"].astype(int).map(
-        lambda n: "Да" if n > instrument_limit else "Нет"
-    )
-    display_cols = [
-        c
-        for c in [
-            "Код инструмента",
-            "Наименование",
-            "Количество",
-            "Превышение",
-            "Договоров",
-            "Проливов",
-            "Лоты",
-            "Тонны залива",
-        ]
-        if c in merged.columns
-    ]
-    rename_limits = {
-        "Договоров": "Договоров (залив)",
-        "Лоты": "Вагонов (лот)",
-        "Тонны залива": "Залив, т",
-    }
-    return merged[display_cols].rename(columns=rename_limits)
 
 
 def build_full_html_report(
@@ -375,13 +333,6 @@ def build_full_html_report(
             "ваши коды, топ 20, две панели; на верхней — пунктир «проливов», "
             f"на нижней в подсказке — детали (допуск {proliv_spread_ms:g} мс).</p>"
         )
-        show_limits = _merged_limits_table(
-            df, fill_for_limits, instrument_limit, inst_counts
-        )
-        limits_body += (
-            "<h3>Заявки и залив по вашим кодам</h3>"
-            + _df_table(show_limits, max_rows=200)
-        )
         detail_html = ""
         for code in fill_for_limits["Код инструмента"].head(10):
             det = contracts_detail_for_instrument(
@@ -414,6 +365,25 @@ def build_full_html_report(
         limits_body += "<h3>Все инструменты (заявки)</h3>" + _df_table(
             inst_counts, max_rows=200
         )
+
+    fill_for_table = (
+        fill_for_limits
+        if fill_for_limits is not None and not fill_for_limits.empty
+        else None
+    )
+    limits_table_view = limits_instruments_display_table(
+        df,
+        fill_for_table,
+        scope="my",
+        top_n=20,
+        rank_by="activity",
+        instrument_limit=instrument_limit,
+    )
+    limits_body += (
+        "<h3>Сводная таблица: код, название, базис, продано, проливы, заявки</h3>"
+        "<p class=\"muted\">Тот же вид «Таблица» на вкладке лимитов (ваши коды, топ 20).</p>"
+        + _df_table(limits_table_view, max_rows=200)
+    )
 
     summary_metrics = _metrics_grid(
         [

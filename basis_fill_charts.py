@@ -12,11 +12,18 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from trade_analytics import fig_instruments_limit, instruments_order_counts
-from utils import normalize_instrument_code
+from utils import detect_basis, normalize_instrument_code, pick_first_nonempty
 
 ScopeMode = Literal["my", "all"]
 RankBy = Literal["activity", "orders", "fill_tons", "prolivs"]
-ChartVariant = Literal["split_panels", "horizontal", "dual_bars", "bars_line", "grouped"]
+ChartVariant = Literal[
+    "split_panels",
+    "horizontal",
+    "dual_bars",
+    "bars_line",
+    "grouped",
+    "table",
+]
 
 
 def _empty_fig(message: str) -> go.Figure:
@@ -195,6 +202,107 @@ def apply_top_n(
     ).reset_index(drop=True)
 
 
+def _basis_by_instrument_from_orders(df: pd.DataFrame) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if df.empty or "Код инструмента" not in df.columns:
+        return out
+    work = df.copy()
+    work["Код инструмента"] = work["Код инструмента"].map(normalize_instrument_code)
+    name_col = "Наименование инструмента" if "Наименование инструмента" in work.columns else None
+    has_basis = "Базис" in work.columns
+    for code, group in work.groupby("Код инструмента", sort=False):
+        code_s = normalize_instrument_code(code)
+        if has_basis:
+            basis = pick_first_nonempty(group["Базис"])
+        else:
+            basis = ""
+        if not basis and name_col:
+            basis = detect_basis(code_s, pick_first_nonempty(group[name_col]))
+        elif not basis:
+            basis = detect_basis(code_s, "")
+        out[code_s] = basis
+    return out
+
+
+def limits_instruments_display_table(
+    df: pd.DataFrame,
+    fill_by_inst: Optional[pd.DataFrame],
+    *,
+    scope: ScopeMode = "my",
+    top_n: int = 20,
+    rank_by: RankBy = "activity",
+    instrument_limit: int = 250,
+) -> pd.DataFrame:
+    """
+    Сводная таблица для вкладки лимитов и HTML-отчёта:
+    код, название, базис, тонны залива, проливы, заявки и др.
+    """
+    frame = prepare_limits_chart_frame(
+        df, fill_by_inst, scope=scope, top_n=top_n, rank_by=rank_by
+    )
+    empty_cols = [
+        "Код инструмента",
+        "Наименование инструмента",
+        "Базис",
+        "Продано, т",
+        "Проливов",
+        "Заявок отправлено",
+        "Договоров",
+        "Вагонов (лот)",
+        "Превышение лимита",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    basis_map = _basis_by_instrument_from_orders(df)
+    work = frame.copy()
+    work["Базис"] = work["Код инструмента"].map(
+        lambda c: basis_map.get(normalize_instrument_code(c), "")
+    )
+    for idx, row in work.iterrows():
+        if str(row.get("Базис") or "").strip():
+            continue
+        work.at[idx, "Базис"] = detect_basis(
+            normalize_instrument_code(row["Код инструмента"]),
+            str(row.get("Наименование") or ""),
+        )
+
+    work["Превышение лимита"] = (
+        pd.to_numeric(work["Количество"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+        .gt(instrument_limit)
+        .map({True: "Да", False: "Нет"})
+    )
+    work["Тонны залива"] = (
+        pd.to_numeric(work.get("Тонны залива"), errors="coerce").fillna(0).round(0)
+    )
+    work["Проливов"] = (
+        pd.to_numeric(work.get("Проливов"), errors="coerce").fillna(0).astype(int)
+    )
+    work["Количество"] = (
+        pd.to_numeric(work.get("Количество"), errors="coerce").fillna(0).astype(int)
+    )
+    work["Договоров"] = (
+        pd.to_numeric(work.get("Договоров"), errors="coerce").fillna(0).astype(int)
+    )
+    work["Лоты"] = pd.to_numeric(work.get("Лоты"), errors="coerce").fillna(0).round(0)
+
+    return pd.DataFrame(
+        {
+            "Код инструмента": work["Код инструмента"].map(normalize_instrument_code),
+            "Наименование инструмента": work["Наименование"].fillna(""),
+            "Базис": work["Базис"].fillna(""),
+            "Продано, т": work["Тонны залива"].astype(int),
+            "Проливов": work["Проливов"],
+            "Заявок отправлено": work["Количество"],
+            "Договоров": work["Договоров"],
+            "Вагонов (лот)": work["Лоты"].astype(int),
+            "Превышение лимита": work["Превышение лимита"],
+        }
+    ).reset_index(drop=True)
+
+
 def prepare_limits_chart_frame(
     df: pd.DataFrame,
     fill_by_inst: Optional[pd.DataFrame],
@@ -308,8 +416,11 @@ def fig_instruments_limit_with_basis_fill(
     """
     Лимиты заявок + залив базиса.
 
-    variant: split_panels | horizontal | dual_bars | bars_line | grouped
+    variant: split_panels | horizontal | dual_bars | bars_line | grouped | table
     """
+    if variant == "table":
+        return _empty_fig("Используйте таблицу на экране (вид «Таблица»)")
+
     merged = prepare_limits_chart_frame(
         df,
         fill_by_inst,

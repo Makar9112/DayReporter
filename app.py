@@ -26,6 +26,7 @@ from trade_analytics import (
 )
 from basis_fill_charts import (
     fig_instruments_limit_with_basis_fill,
+    limits_instruments_display_table,
     merge_orders_and_basis_fill,
     prepare_limits_chart_frame,
 )
@@ -736,53 +737,76 @@ def render_tab_limits(
         st.success(f"Ни один инструмент не превысил лимит {instrument_limit} заявок.")
 
     if fill_summary is not None and not fill_summary.empty:
-        st.markdown("##### График: заявки и залив")
-        fc1, fc2, fc3 = st.columns(3)
-        with fc1:
-            scope_all = st.checkbox(
-                "Все инструменты из договоров",
-                value=False,
-                help=(
-                    "По умолчанию — только коды из вашего журнала в выбранном интервале. "
-                    "Включите, чтобы показать весь рынок из файла договоров (может быть очень много)."
-                ),
-                key="limits_scope_all",
-            )
-        with fc2:
-            top_n = st.selectbox(
-                "На графике",
-                options=[10, 15, 20, 30, 0],
-                index=2,
-                format_func=lambda x: "Топ {}".format(x) if x else "Без ограничения",
-                key="limits_top_n",
-            )
-        with fc3:
-            rank_by = st.selectbox(
-                "Сортировка топа",
-                options=[
-                    ("activity", "По активности"),
-                    ("orders", "По заявкам"),
-                    ("fill_tons", "По заливу, т"),
-                    ("prolivs", "По числу проливов"),
-                ],
-                format_func=lambda x: x[1],
-                key="limits_rank_by",
-            )[0]
+        st.markdown("##### Заявки и залив по инструментам")
+    else:
+        st.markdown("##### Заявки по инструментам")
 
-        chart_variant = st.radio(
-            "Вид графика",
+    has_fill_data = fill_summary is not None and not fill_summary.empty
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        scope_all = st.checkbox(
+            "Все инструменты из договоров",
+            value=False,
+            disabled=not has_fill_data,
+            help=(
+                "По умолчанию — только коды из вашего журнала в выбранном интервале. "
+                "Включите, чтобы показать весь рынок из файла договоров (может быть очень много)."
+            ),
+            key="limits_scope_all",
+        )
+    with fc2:
+        top_n = st.selectbox(
+            "Показать",
+            options=[10, 15, 20, 30, 0],
+            index=2,
+            format_func=lambda x: "Топ {}".format(x) if x else "Без ограничения",
+            key="limits_top_n",
+        )
+    with fc3:
+        rank_by = st.selectbox(
+            "Сортировка топа",
             options=[
-                ("split_panels", "Две панели: заявки сверху, залив снизу (рекомендуется)"),
-                ("horizontal", "Горизонтальные столбики (удобно для кодов)"),
-                ("dual_bars", "Две оси Y: заявки + тонны (столбики)"),
-                ("bars_line", "Две оси Y: заявки + тонны (линия)"),
-                ("grouped", "Заявки (шт) и вагоны (лот) рядом"),
+                ("activity", "По активности"),
+                ("orders", "По заявкам"),
+                ("fill_tons", "По заливу, т"),
+                ("prolivs", "По числу проливов"),
             ],
             format_func=lambda x: x[1],
-            horizontal=False,
-            key="limits_chart_variant",
+            key="limits_rank_by",
+        )[0]
+
+    chart_variant = st.radio(
+        "Вид",
+        options=[
+            ("split_panels", "Две панели: заявки сверху, залив снизу (рекомендуется)"),
+            ("horizontal", "Горизонтальные столбики (удобно для кодов)"),
+            ("dual_bars", "Две оси Y: заявки + тонны (столбики)"),
+            ("bars_line", "Две оси Y: заявки + тонны (линия)"),
+            ("grouped", "Заявки (шт) и вагоны (лот) рядом"),
+            ("table", "Таблица: название, базис, тонны, проливы, заявки"),
+        ],
+        format_func=lambda x: x[1],
+        horizontal=False,
+        key="limits_chart_variant",
+    )
+    scope = "all" if scope_all and has_fill_data else "my"
+    fill_arg = fill_summary if has_fill_data else None
+
+    if chart_variant[0] == "table":
+        summary_table = limits_instruments_display_table(
+            df,
+            fill_arg,
+            scope=scope,
+            top_n=int(top_n),
+            rank_by=rank_by,
+            instrument_limit=instrument_limit,
         )
-        scope = "all" if scope_all else "my"
+        st.caption(
+            "«Продано, т» — суммарный залив по договорам в интервале сессии; "
+            "«Заявок отправлено» — число фиксаций в журнале по коду."
+        )
+        st.dataframe(summary_table, use_container_width=True, hide_index=True)
+    elif has_fill_data:
         st.plotly_chart(
             fig_instruments_limit_with_basis_fill(
                 df,
