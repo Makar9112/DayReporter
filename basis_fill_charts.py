@@ -202,6 +202,20 @@ def apply_top_n(
     ).reset_index(drop=True)
 
 
+def _add_proliv_minus_orders_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Разница: число проливов по договорам минус заявок в журнале."""
+    if df.empty:
+        return df
+    out = df.copy()
+    proliv = pd.to_numeric(out.get("Проливов"), errors="coerce")
+    sent = pd.to_numeric(out.get("Заявок отправлено"), errors="coerce")
+    out["упущенные попытки"] = proliv - sent
+    return out.drop(
+        columns=["Δ заявок − max orders", "Пролив − заявки", "Упущенные попытки"],
+        errors="ignore",
+    )
+
+
 def _reorder_display_columns(df: pd.DataFrame) -> pd.DataFrame:
     order = [
         "Код инструмента",
@@ -209,11 +223,11 @@ def _reorder_display_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Базис",
         "Max orders",
         "Заявок отправлено",
-        "Δ заявок − max orders",
+        "Проливов",
+        "упущенные попытки",
         "Лот на заявку",
         "Макс. лотов",
         "Продано, т",
-        "Проливов",
         "Договоров",
         "Вагонов (лот)",
         "Превышение лимита",
@@ -228,23 +242,31 @@ def _attach_stack_limits_to_display_table(
     stack_limits: Optional[pd.DataFrame],
 ) -> pd.DataFrame:
     if display.empty:
-        return display
+        if stack_limits is None or stack_limits.empty:
+            return display
+        out = stack_limits.copy()
+        out["Наименование инструмента"] = ""
+        out["Базис"] = ""
+        out["Продано, т"] = pd.NA
+        out["Проливов"] = pd.NA
+        out["Заявок отправлено"] = pd.NA
+        out["Договоров"] = pd.NA
+        out["Вагонов (лот)"] = pd.NA
+        out["Превышение лимита"] = pd.NA
+        return _reorder_display_columns(_add_proliv_minus_orders_column(out))
+
     out = display.copy()
     if stack_limits is None or stack_limits.empty:
         out["Max orders"] = pd.NA
         out["Лот на заявку"] = pd.NA
         out["Макс. лотов"] = pd.NA
-        out["Δ заявок − max orders"] = pd.NA
-        return _reorder_display_columns(out)
+        return _reorder_display_columns(_add_proliv_minus_orders_column(out))
 
     lim = stack_limits.copy()
     lim["Код инструмента"] = lim["Код инструмента"].map(normalize_instrument_code)
     out["Код инструмента"] = out["Код инструмента"].map(normalize_instrument_code)
     out = out.merge(lim, on="Код инструмента", how="left", suffixes=("", "_cfg"))
-    sent = pd.to_numeric(out["Заявок отправлено"], errors="coerce")
-    cap = pd.to_numeric(out["Max orders"], errors="coerce")
-    out["Δ заявок − max orders"] = sent - cap
-    return _reorder_display_columns(out)
+    return _reorder_display_columns(_add_proliv_minus_orders_column(out))
 
 
 def _basis_by_instrument_from_orders(df: pd.DataFrame) -> dict[str, str]:
@@ -298,8 +320,31 @@ def limits_instruments_display_table(
         "Превышение лимита",
     ]
     if frame.empty:
-        empty = pd.DataFrame(columns=empty_cols)
-        return _attach_stack_limits_to_display_table(empty, stack_limits)
+        counts = instruments_order_counts(df)
+        if counts.empty:
+            empty = pd.DataFrame(columns=empty_cols)
+            return _attach_stack_limits_to_display_table(empty, stack_limits)
+        fallback = pd.DataFrame(
+            {
+                "Код инструмента": counts["Код инструмента"].map(normalize_instrument_code),
+                "Наименование инструмента": counts.get("Наименование", pd.Series("", index=counts.index)),
+                "Базис": "",
+                "Продано, т": 0,
+                "Проливов": 0,
+                "Заявок отправлено": counts["Количество"],
+                "Договоров": 0,
+                "Вагонов (лот)": 0,
+                "Превышение лимита": counts["Количество"]
+                .astype(int)
+                .gt(instrument_limit)
+                .map({True: "Да", False: "Нет"}),
+            }
+        )
+        basis_map = _basis_by_instrument_from_orders(df)
+        fallback["Базис"] = fallback["Код инструмента"].map(
+            lambda c: basis_map.get(normalize_instrument_code(c), "")
+        )
+        return _attach_stack_limits_to_display_table(fallback, stack_limits)
 
     basis_map = _basis_by_instrument_from_orders(df)
     work = frame.copy()

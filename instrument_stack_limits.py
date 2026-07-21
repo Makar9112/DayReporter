@@ -240,20 +240,25 @@ def _parse_terminal_paste_rows(text: str) -> pd.DataFrame:
         if not line or line.startswith("#"):
             continue
         parts = re.split(r"[\t\s]+", line.strip())
-        if len(parts) != 5:
+        if len(parts) < 5:
             continue
         code = normalize_instrument_code(parts[0])
         if not code or not re.fullmatch(r"[A-Za-z0-9]{4,}", code):
             continue
+        if code.lower() in ("security", "enabled", "code"):
+            continue
         enabled = _to_int(parts[1])
         if enabled == 0:
             continue
+        order_size = _to_int(parts[2])
+        max_qty = _to_int(parts[3])
+        max_orders = _to_int(parts[4])
         out_rows.append(
             {
                 "Код инструмента": code,
-                "Лот на заявку": _to_int(parts[2]),
-                "Макс. лотов": _to_int(parts[3]),
-                "Max orders": _to_int(parts[4]),
+                "Лот на заявку": order_size,
+                "Макс. лотов": max_qty,
+                "Max orders": max_orders,
             }
         )
 

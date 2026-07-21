@@ -166,6 +166,8 @@ def render_sidebar():
             label_visibility="collapsed",
             placeholder="A692DZM060F\t2\t1\t1\t10",
         )
+        if st.button("Применить вставку", use_container_width=True, key="stack_limits_paste_btn"):
+            st.session_state["stack_limits_paste_pending"] = (stack_limits_paste or "").strip()
 
     if st.session_state.get("df_all") is not None:
         name = st.session_state.get("upload_name", "файл")
@@ -175,7 +177,10 @@ def render_sidebar():
         st.sidebar.caption(f"Договоры: **{cname}**")
     if st.session_state.get("df_stack_limits") is not None:
         lname = st.session_state.get("stack_limits_upload_name", "лимиты")
-        st.sidebar.caption(f"Лимиты по кодам: **{lname}**")
+        n_lim = len(st.session_state["df_stack_limits"])
+        st.sidebar.caption(f"Лимиты по кодам: **{lname}** ({n_lim} кодов)")
+        if st.session_state.pop("stack_limits_just_loaded", None):
+            st.sidebar.success(f"Справочник лимитов: {n_lim} кодов")
 
     if st.session_state.get("df_all") is not None or st.session_state.get("df_contracts") is not None:
         if st.sidebar.button("Очистить загруженные данные", use_container_width=True):
@@ -191,6 +196,8 @@ def render_sidebar():
                 "stack_limits_upload_name",
                 "stack_limits_upload_key",
                 "stack_limits_paste_key",
+                "stack_limits_paste_pending",
+                "stack_limits_just_loaded",
             ):
                 st.session_state.pop(key, None)
             st.session_state["uploader_reset"] = st.session_state.get("uploader_reset", 0) + 1
@@ -349,6 +356,10 @@ def ensure_contracts_loaded(uploaded_contracts) -> bool:
 
 def ensure_stack_limits_loaded(uploaded_stack_limits, paste_text: str = "") -> bool:
     """Справочник Max orders / лот на заявку по коду инструмента."""
+    apply_paste = st.session_state.pop("stack_limits_paste_pending", None)
+    if apply_paste is not None:
+        paste_text = apply_paste
+
     if uploaded_stack_limits is not None:
         file_key = (uploaded_stack_limits.name, uploaded_stack_limits.size)
         if st.session_state.get("stack_limits_upload_key") != file_key:
@@ -370,6 +381,7 @@ def ensure_stack_limits_loaded(uploaded_stack_limits, paste_text: str = "") -> b
             st.session_state["stack_limits_upload_name"] = uploaded_stack_limits.name
             st.session_state["stack_limits_paste_key"] = None
             st.session_state["df_stack_limits"] = df_l
+            st.session_state["stack_limits_just_loaded"] = True
 
         return st.session_state.get("df_stack_limits") is not None
 
@@ -385,26 +397,26 @@ def ensure_stack_limits_loaded(uploaded_stack_limits, paste_text: str = "") -> b
                 st.session_state.pop(key, None)
         return st.session_state.get("df_stack_limits") is not None
 
-    paste_key = hash(paste)
-    if st.session_state.get("stack_limits_paste_key") != paste_key:
+    if st.session_state.get("stack_limits_paste_key") != paste:
         try:
             with st.spinner("Разбор вставленных лимитов…"):
                 df_l = load_stack_limits_text(paste)
         except ValueError as exc:
-            st.error(f"Ошибка разбора лимитов: {exc}")
+            st.sidebar.error(f"Ошибка разбора лимитов: {exc}")
             return False
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Непредвиденная ошибка при разборе лимитов: {exc}")
+            st.sidebar.error(f"Непредвиденная ошибка при разборе лимитов: {exc}")
             return False
 
         if df_l.empty:
-            st.warning("Во вставке нет распознанных строк.")
+            st.sidebar.warning("Во вставке нет распознанных строк (нужно 5 полей в строке).")
             return False
 
-        st.session_state["stack_limits_paste_key"] = paste_key
+        st.session_state["stack_limits_paste_key"] = paste
         st.session_state["stack_limits_upload_key"] = None
         st.session_state["stack_limits_upload_name"] = "вставка из буфера"
         st.session_state["df_stack_limits"] = df_l
+        st.session_state["stack_limits_just_loaded"] = True
 
     return st.session_state.get("df_stack_limits") is not None
 
@@ -893,8 +905,38 @@ def render_tab_limits(
     scope = "all" if scope_all and has_fill_data else "my"
     fill_arg = fill_summary if has_fill_data else None
 
+    limits_with_stack = None
+    if df_stack_limits is not None and not df_stack_limits.empty:
+        limits_with_stack = limits_instruments_display_table(
+            df,
+            fill_arg,
+            scope=scope,
+            top_n=int(top_n),
+            rank_by=rank_by,
+            instrument_limit=instrument_limit,
+            stack_limits=df_stack_limits,
+        )
+        if chart_variant[0] != "table":
+            st.markdown("##### Сверка с Max orders (справочник настроек)")
+            filled = 0
+            if "Max orders" in limits_with_stack.columns:
+                filled = int(limits_with_stack["Max orders"].notna().sum())
+            st.caption(
+                f"В справочнике **{len(df_stack_limits)}** кодов; Max orders заполнен "
+                f"у **{filled}** строк. Колонка **упущенные попытки** = проливов − заявок."
+            )
+            if filled == 0 and not limits_with_stack.empty:
+                j_codes = limits_with_stack["Код инструмента"].astype(str).head(3).tolist()
+                c_codes = df_stack_limits["Код инструмента"].astype(str).head(3).tolist()
+                st.warning(
+                    "Коды из журнала не совпали со справочником. "
+                    f"Журнал (примеры): {', '.join(j_codes)} — справочник: {', '.join(c_codes)}."
+                )
+            st.dataframe(limits_with_stack, use_container_width=True, hide_index=True)
+            st.markdown("---")
+
     if chart_variant[0] == "table":
-        summary_table = limits_instruments_display_table(
+        summary_table = limits_with_stack or limits_instruments_display_table(
             df,
             fill_arg,
             scope=scope,
@@ -905,7 +947,7 @@ def render_tab_limits(
         )
         st.caption(
             "«Продано, т» — залив по договорам; «Заявок отправлено» — журнал. "
-            "При загрузке файла лимитов — Max orders, лот/макс. лотов и Δ заявок − max orders."
+            "Max orders — из справочника. **упущенные попытки** = проливов минус заявок."
         )
         st.dataframe(summary_table, use_container_width=True, hide_index=True)
     elif has_fill_data:
