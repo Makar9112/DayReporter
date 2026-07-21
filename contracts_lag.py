@@ -263,7 +263,54 @@ def wagon_tons_per_lot(code: str, name: str = "") -> float:
     return 60.0
 
 
-def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFrame:
+DEFAULT_PROLIV_SPREAD_MS = 5.0
+
+
+def count_proliv_clusters(times_sec: pd.Series, spread_ms: float = DEFAULT_PROLIV_SPREAD_MS) -> int:
+    """
+    Число «проливов»: группы договоров по одному инструменту,
+    где соседние по времени отличаются не более чем на spread_ms (обычно 3–5 мс).
+    """
+    t = pd.to_numeric(times_sec, errors="coerce").dropna().sort_values()
+    if t.empty:
+        return 0
+    spread_sec = float(spread_ms) / 1000.0
+    clusters = 1
+    last = float(t.iloc[0])
+    for val in t.iloc[1:]:
+        v = float(val)
+        if v - last > spread_sec:
+            clusters += 1
+        last = v
+    return int(clusters)
+
+
+def assign_proliv_ids(times_sec: pd.Series, spread_ms: float = DEFAULT_PROLIV_SPREAD_MS) -> pd.Series:
+    """Номер пролива (1, 2, …) для каждой строки в том же порядке, что и times_sec.index."""
+    spread_sec = float(spread_ms) / 1000.0
+    out = pd.Series(index=times_sec.index, dtype="Int64")
+    valid = pd.to_numeric(times_sec, errors="coerce")
+    order = valid.dropna().sort_values().index
+    if len(order) == 0:
+        return out
+
+    proliv = 1
+    last = float(valid.loc[order[0]])
+    out.loc[order[0]] = proliv
+    for idx in order[1:]:
+        v = float(valid.loc[idx])
+        if v - last > spread_sec:
+            proliv += 1
+        out.loc[idx] = proliv
+        last = v
+    return out
+
+
+def aggregate_basis_fill_by_instrument(
+    df_contracts: pd.DataFrame,
+    *,
+    proliv_spread_ms: float = DEFAULT_PROLIV_SPREAD_MS,
+) -> pd.DataFrame:
     """
     Суммарный залив по инструменту: все договоры в переданном фрейме
     (уже отфильтрованном по сессии при необходимости).
@@ -272,6 +319,7 @@ def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFra
         "Код инструмента",
         "Наименование_договора",
         "Договоров",
+        "Проливов",
         "Лоты",
         "Тонны залива",
     ]
@@ -302,11 +350,20 @@ def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFra
             else 0.0
         )
         t_per = wagon_tons_per_lot(code_s, name)
+        times = (
+            group["Время_сек"]
+            if "Время_сек" in group.columns
+            else pd.Series(dtype=float)
+        )
+        if times is None:
+            times = pd.Series(dtype=float)
+        prolivs = count_proliv_clusters(times, spread_ms=proliv_spread_ms)
         rows.append(
             {
                 "Код инструмента": code_s,
                 "Наименование_договора": name,
                 "Договоров": int(len(group)),
+                "Проливов": prolivs,
                 "Лоты": lots,
                 "Тонны залива": lots * t_per,
             }
@@ -321,9 +378,12 @@ def aggregate_basis_fill_by_instrument(df_contracts: pd.DataFrame) -> pd.DataFra
 def contracts_detail_for_instrument(
     df_contracts: pd.DataFrame,
     instrument_code: str,
+    *,
+    proliv_spread_ms: float = DEFAULT_PROLIV_SPREAD_MS,
 ) -> pd.DataFrame:
     """Договоры по одному инструменту для детализации залива."""
     cols_out = [
+        "Пролив",
         "Номер договора",
         "Время договора",
         "Объем, лотов",
@@ -363,5 +423,10 @@ def contracts_detail_for_instrument(
         out["Цена"] = None
     if "Объем, лотов" not in out.columns:
         out["Объем, лотов"] = 0
+
+    if "Время_сек" in out.columns:
+        out["Пролив"] = assign_proliv_ids(out["Время_сек"], spread_ms=proliv_spread_ms)
+    else:
+        out["Пролив"] = 1
 
     return out[cols_out].reset_index(drop=True)

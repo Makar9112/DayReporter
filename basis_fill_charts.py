@@ -14,7 +14,7 @@ from plotly.subplots import make_subplots
 from trade_analytics import fig_instruments_limit, instruments_order_counts
 
 ScopeMode = Literal["my", "all"]
-RankBy = Literal["activity", "orders", "fill_tons"]
+RankBy = Literal["activity", "orders", "fill_tons", "prolivs"]
 ChartVariant = Literal["split_panels", "horizontal", "dual_bars", "bars_line", "grouped"]
 
 
@@ -103,12 +103,13 @@ def merge_orders_and_basis_fill(
     if fill_by_inst is None or fill_by_inst.empty:
         out = counts.copy()
         out["Договоров"] = 0
+        out["Проливов"] = 0
         out["Лоты"] = 0.0
         out["Тонны залива"] = 0.0
         return _finalize_merged(out)
 
     fill = fill_by_inst[
-        ["Код инструмента", "Договоров", "Лоты", "Тонны залива"]
+        ["Код инструмента", "Договоров", "Проливов", "Лоты", "Тонны залива"]
     ].copy()
     fill["Код инструмента"] = fill["Код инструмента"].astype(str)
 
@@ -119,6 +120,7 @@ def merge_orders_and_basis_fill(
                 "Наименование",
                 "Количество",
                 "Договоров",
+                "Проливов",
                 "Лоты",
                 "Тонны залива",
             ]
@@ -149,6 +151,9 @@ def _finalize_merged(merged: pd.DataFrame) -> pd.DataFrame:
     merged["Договоров"] = (
         pd.to_numeric(merged.get("Договоров"), errors="coerce").fillna(0).astype(int)
     )
+    merged["Проливов"] = (
+        pd.to_numeric(merged.get("Проливов"), errors="coerce").fillna(0).astype(int)
+    )
     merged["Лоты"] = pd.to_numeric(merged.get("Лоты"), errors="coerce").fillna(0.0)
     merged["Тонны залива"] = (
         pd.to_numeric(merged.get("Тонны залива"), errors="coerce").fillna(0.0)
@@ -172,6 +177,8 @@ def apply_top_n(
         work["_sort"] = work["Количество"]
     elif rank_by == "fill_tons":
         work["_sort"] = work["Тонны залива"]
+    elif rank_by == "prolivs":
+        work["_sort"] = work["Проливов"]
     else:
         # Сводный «интерес»: заявки + эквивалент ~300 т ≈ 1 ед. для сортировки
         work["_sort"] = work["Количество"] + work["Тонны залива"] / 300.0
@@ -277,7 +284,7 @@ def _fig_split_panels(
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.12,
-        subplot_titles=("Ваши заявки, шт", "Залив базиса, т"),
+        subplot_titles=("Ваши заявки, шт", "Залив базиса, т (число проливов — в подсказке)"),
     )
     fig.add_trace(
         go.Bar(
@@ -311,7 +318,9 @@ def _fig_split_panels(
             name="Залив, т",
             hovertemplate=(
                 "%{x}<br>%{customdata[2]}<br>Тонн: %{y:.0f}<br>"
-                "Вагонов: %{customdata[0]:.0f}<br>Договоров: %{customdata[1]}"
+                "Проливов: %{customdata[3]}<br>"
+                "Договоров: %{customdata[1]}<br>"
+                "Вагонов: %{customdata[0]:.0f}"
                 "<extra></extra>"
             ),
             customdata=list(
@@ -319,6 +328,7 @@ def _fig_split_panels(
                     merged["Лоты"],
                     merged["Договоров"],
                     merged["Наименование"].replace("", "—"),
+                    merged["Проливов"],
                 )
             ),
         ),
@@ -374,7 +384,9 @@ def _fig_horizontal_dual(
             textposition="outside",
             hovertemplate=(
                 "%{customdata[2]}<br>Тонн: %{x:.0f}<br>"
-                "Вагонов: %{customdata[0]:.0f}<br>Договоров: %{customdata[1]}"
+                "Проливов: %{customdata[3]}<br>"
+                "Договоров: %{customdata[1]}<br>"
+                "Вагонов: %{customdata[0]:.0f}"
                 "<extra></extra>"
             ),
             customdata=list(
@@ -382,6 +394,7 @@ def _fig_horizontal_dual(
                     m["Лоты"],
                     m["Договоров"],
                     m["Наименование"].replace("", "—"),
+                    m["Проливов"],
                 )
             ),
         )

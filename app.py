@@ -694,12 +694,30 @@ def render_tab_limits(
     )
 
     fill_summary = None
+    proliv_spread_ms = 5.0
     if df_contracts_session is not None and not df_contracts_session.empty:
-        fill_summary = aggregate_basis_fill_by_instrument(df_contracts_session)
+        proliv_spread_ms = float(
+            st.number_input(
+                "Пролив: допуск по времени, мс",
+                min_value=1.0,
+                max_value=20.0,
+                value=5.0,
+                step=1.0,
+                help=(
+                    "Договоры по одному инструменту с разницей не больше этого интервала "
+                    "считаются одним «проливом» (как на скрине — несколько сделок в одну миллисекунду)."
+                ),
+                key="limits_proliv_spread_ms",
+            )
+        )
+        fill_summary = aggregate_basis_fill_by_instrument(
+            df_contracts_session,
+            proliv_spread_ms=proliv_spread_ms,
+        )
         st.caption(
             "По файлу договоров в том же интервале, что и заявки: "
-            "**залив базиса** — суммарный объём заключённых сделок "
-            "(лот = вагон; бензин 60 т, дизель 65 т на вагон)."
+            "**залив** — суммарный объём сделок (лот = вагон; бензин 60 т, дизель 65 т). "
+            f"**Пролив** — число «пачек» договоров по времени (допуск **{proliv_spread_ms:g} мс**)."
         )
 
     counts = instruments_order_counts(df)
@@ -745,6 +763,7 @@ def render_tab_limits(
                     ("activity", "По активности"),
                     ("orders", "По заявкам"),
                     ("fill_tons", "По заливу, т"),
+                    ("prolivs", "По числу проливов"),
                 ],
                 format_func=lambda x: x[1],
                 key="limits_rank_by",
@@ -806,6 +825,7 @@ def render_tab_limits(
                 "Количество",
                 "Превышение",
                 "Договоров",
+                "Проливов",
                 "Лоты",
                 "Тонны залива",
             ]
@@ -813,6 +833,7 @@ def render_tab_limits(
         ]
         rename = {
             "Договоров": "Договоров (залив)",
+            "Проливов": "Проливов",
             "Лоты": "Вагонов (лот)",
             "Тонны залива": "Залив, т",
         }
@@ -837,7 +858,11 @@ def render_tab_limits(
             if not codes:
                 codes = fill_summary["Код инструмента"].astype(str).tolist()
             pick = st.selectbox("Код инструмента", options=codes, key="fill_detail_code")
-            detail = contracts_detail_for_instrument(df_contracts_session, pick)
+            detail = contracts_detail_for_instrument(
+                df_contracts_session,
+                pick,
+                proliv_spread_ms=proliv_spread_ms,
+            )
             if detail.empty:
                 st.info("Нет договоров по выбранному инструменту в интервале.")
             else:
