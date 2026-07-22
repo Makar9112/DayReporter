@@ -40,54 +40,6 @@ streamlit run app.py
 
 Откроется браузер (обычно http://localhost:8501).
 
-## Деплой на Streamlit Community Cloud
-
-Приложению нужен репозиторий на GitHub (публичный или приватный).
-
-### 1. Создайте репозиторий и загрузите код
-
-В папке проекта:
-
-```bash
-git init
-git add app.py analytics.py criteria.py utils.py requirements.txt runtime.txt README.md .gitignore .streamlit
-git commit -m "Initial commit: анализатор торгов СПбМТСБ"
-git branch -M main
-git remote add origin https://github.com/<ВАШ_ЛОГИН>/<ИМЯ_РЕПО>.git
-git push -u origin main
-```
-
-Создайте пустой репозиторий на GitHub заранее (без README, если уже есть локальный).
-
-### 2. Подключите приложение в Cloud
-
-1. Откройте [share.streamlit.io](https://share.streamlit.io) и войдите через GitHub.
-2. **New app** → выберите репозиторий, ветку `main`.
-3. **Main file path:** `app.py`
-4. При необходимости укажите Python **3.11** (или оставьте как в `runtime.txt`).
-5. Нажмите **Deploy**.
-
-Через несколько минут появится публичный URL вида  
-`https://<имя-приложения>.streamlit.app`.
-
-### 3. Обновления
-
-После изменений в коде:
-
-```bash
-git add -A
-git commit -m "Описание изменений"
-git push
-```
-
-Cloud подтянет обновление автоматически (или через **Reboot** в настройках приложения).
-
-### Замечания по Cloud
-
-- Excel-отчёты **не** коммитьте в репозиторий (они в `.gitignore`) — пользователи загружают файлы через интерфейс.
-- Лимит загрузки в конфиге: **50 МБ** (`.streamlit/config.toml`).
-- Секреты приложению не нужны; файл `.streamlit/secrets.toml` не используйте в публичном репо.
-- Приватный репозиторий: при первом деплое Streamlit попросит доступ к GitHub.
 
 ## Использование
 
