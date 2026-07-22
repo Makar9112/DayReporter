@@ -209,9 +209,9 @@ def _add_proliv_minus_orders_column(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     proliv = pd.to_numeric(out.get("Проливов"), errors="coerce")
     sent = pd.to_numeric(out.get("Заявок отправлено"), errors="coerce")
-    out["упущенные попытки"] = proliv - sent
+    out["Упущенные попытки"] = proliv - sent
     return out.drop(
-        columns=["Δ заявок − max orders", "Пролив − заявки", "Упущенные попытки"],
+        columns=["Δ заявок − max orders", "Пролив − заявки", "упущенные попытки"],
         errors="ignore",
     )
 
@@ -224,7 +224,7 @@ def _reorder_display_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Max orders",
         "Заявок отправлено",
         "Проливов",
-        "упущенные попытки",
+        "Упущенные попытки",
         "Лот на заявку",
         "Макс. лотов",
         "Продано, т",

@@ -923,7 +923,7 @@ def render_tab_limits(
                 filled = int(limits_with_stack["Max orders"].notna().sum())
             st.caption(
                 f"В справочнике **{len(df_stack_limits)}** кодов; Max orders заполнен "
-                f"у **{filled}** строк. Колонка **упущенные попытки** = проливов − заявок."
+                f"у **{filled}** строк. Колонка **Упущенные попытки** = проливов − заявок."
             )
             if filled == 0 and not limits_with_stack.empty:
                 j_codes = limits_with_stack["Код инструмента"].astype(str).head(3).tolist()
@@ -947,7 +947,7 @@ def render_tab_limits(
         )
         st.caption(
             "«Продано, т» — залив по договорам; «Заявок отправлено» — журнал. "
-            "Max orders — из справочника. **упущенные попытки** = проливов минус заявок."
+            "Max orders — из справочника. **Упущенные попытки** = проливов минус заявок."
         )
         st.dataframe(summary_table, use_container_width=True, hide_index=True)
     elif has_fill_data:
